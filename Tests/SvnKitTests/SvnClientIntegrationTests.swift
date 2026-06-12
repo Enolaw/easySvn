@@ -84,6 +84,136 @@ struct SvnClientIntegrationTests {
         #expect(info.lastCommitAuthor != nil)
     }
 
+    @Test("log 返回提交历史与变更文件")
+    func log() async throws {
+        let repo = try await TestRepository.make()
+        defer { repo.cleanup() }
+        let client = repo.client
+
+        try repo.write("a.txt", contents: "a\n")
+        try await client.add(paths: ["a.txt"], in: repo.workingCopy)
+        try await client.commit(message: "first: add a.txt", in: repo.workingCopy)
+
+        try repo.write("a.txt", contents: "a changed\n")
+        try await client.commit(message: "second: modify a.txt", in: repo.workingCopy)
+
+        // svn log 对工作副本默认查到其 BASE 版本为止，需先 update 推进根目录版本
+        try await client.update(at: repo.workingCopy)
+
+        let entries = try await client.log(at: repo.workingCopy.path)
+        #expect(entries.count == 2)
+        // 默认倒序：最新在前
+        #expect(entries[0].revision == 2)
+        #expect(entries[0].message == "second: modify a.txt")
+        #expect(entries[0].changedPaths.count == 1)
+        #expect(entries[0].changedPaths[0].action == .modified)
+        #expect(entries[1].revision == 1)
+        #expect(entries[1].changedPaths[0].action == .added)
+
+        // limit 分页
+        let limited = try await client.log(at: repo.workingCopy.path, limit: 1)
+        #expect(limited.count == 1)
+        #expect(limited[0].revision == 2)
+    }
+
+    @Test("list 浏览远程仓库目录")
+    func list() async throws {
+        let repo = try await TestRepository.make()
+        defer { repo.cleanup() }
+        let client = repo.client
+
+        try repo.write("readme.txt", contents: "hello\n")
+        try FileManager.default.createDirectory(
+            at: repo.workingCopy.appendingPathComponent("src"),
+            withIntermediateDirectories: true
+        )
+        try repo.write("src/main.swift", contents: "print(1)\n")
+        try await client.add(paths: ["readme.txt", "src"], in: repo.workingCopy)
+        try await client.commit(message: "init", in: repo.workingCopy)
+
+        let entries = try await client.list(repo.repositoryURL)
+        #expect(entries.count == 2)
+
+        let dir = try #require(entries.first { $0.name == "src" })
+        #expect(dir.kind == .dir)
+        let file = try #require(entries.first { $0.name == "readme.txt" })
+        #expect(file.kind == .file)
+        #expect(file.size == 6)
+        #expect(file.commitRevision == 1)
+    }
+
+    @Test("cat 读取指定版本内容")
+    func cat() async throws {
+        let repo = try await TestRepository.make()
+        defer { repo.cleanup() }
+        let client = repo.client
+
+        try repo.write("v.txt", contents: "version 1\n")
+        try await client.add(paths: ["v.txt"], in: repo.workingCopy)
+        try await client.commit(message: "r1", in: repo.workingCopy)
+        try repo.write("v.txt", contents: "version 2\n")
+        try await client.commit(message: "r2", in: repo.workingCopy)
+
+        let head = try await client.cat(repo.repositoryURL + "/v.txt")
+        #expect(String(decoding: head, as: UTF8.self) == "version 2\n")
+
+        let old = try await client.cat(repo.repositoryURL + "/v.txt", revision: "1")
+        #expect(String(decoding: old, as: UTF8.self) == "version 1\n")
+    }
+
+    @Test("diff 输出本地修改")
+    func diff() async throws {
+        let repo = try await TestRepository.make()
+        defer { repo.cleanup() }
+        let client = repo.client
+
+        try repo.write("d.txt", contents: "old line\n")
+        try await client.add(paths: ["d.txt"], in: repo.workingCopy)
+        try await client.commit(message: "base", in: repo.workingCopy)
+
+        try repo.write("d.txt", contents: "new line\n")
+        let output = try await client.diff(at: repo.workingCopy)
+        #expect(output.contains("-old line"))
+        #expect(output.contains("+new line"))
+    }
+
+    @Test("delete / move / cleanup / export")
+    func fileOperations() async throws {
+        let repo = try await TestRepository.make()
+        defer { repo.cleanup() }
+        let client = repo.client
+
+        try repo.write("del.txt", contents: "x\n")
+        try repo.write("old-name.txt", contents: "y\n")
+        try await client.add(paths: ["del.txt", "old-name.txt"], in: repo.workingCopy)
+        try await client.commit(message: "base", in: repo.workingCopy)
+
+        // delete：状态变为 deleted
+        try await client.delete(paths: ["del.txt"], in: repo.workingCopy)
+        var entries = try await client.status(at: repo.workingCopy)
+        let deleted = try #require(entries.first { $0.path == "del.txt" })
+        #expect(deleted.itemStatus == .deleted)
+
+        // move：旧路径 deleted，新路径 added 且标记为复制
+        try await client.move(from: "old-name.txt", to: "new-name.txt", in: repo.workingCopy)
+        entries = try await client.status(at: repo.workingCopy)
+        let moved = try #require(entries.first { $0.path == "new-name.txt" })
+        #expect(moved.itemStatus == .added)
+        #expect(moved.isCopied)
+
+        try await client.commit(message: "delete + rename", in: repo.workingCopy)
+
+        // cleanup 正常执行
+        try await client.cleanup(at: repo.workingCopy)
+
+        // export：导出目录不含 .svn
+        let exportDir = repo.root.appendingPathComponent("exported")
+        try await client.export(repo.repositoryURL, to: exportDir)
+        #expect(FileManager.default.fileExists(atPath: exportDir.appendingPathComponent("new-name.txt").path))
+        #expect(!FileManager.default.fileExists(atPath: exportDir.appendingPathComponent(".svn").path))
+        #expect(!FileManager.default.fileExists(atPath: exportDir.appendingPathComponent("del.txt").path))
+    }
+
     @Test("非工作副本目录报 E155007")
     func notAWorkingCopy() async throws {
         let client = try SvnClient.detect()

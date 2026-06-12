@@ -7,17 +7,27 @@ public struct SvnClient: Sendable {
 
     /// svn 可执行文件路径。
     public let executable: URL
+    /// 认证选项（凭据、证书信任），注入到每条命令。
+    public let authOptions: SvnAuthOptions
 
-    public init(executable: URL) {
+    public init(executable: URL, authOptions: SvnAuthOptions = SvnAuthOptions()) {
         self.executable = executable
+        self.authOptions = authOptions
     }
 
     /// 自动探测系统中的 svn。
-    public static func detect() throws -> SvnClient {
+    public static func detect(authOptions: SvnAuthOptions = SvnAuthOptions()) throws -> SvnClient {
         guard let url = SvnBinaryLocator.locateSvn() else {
             throw SvnKitError.svnNotFound
         }
-        return SvnClient(executable: url)
+        return SvnClient(executable: url, authOptions: authOptions)
+    }
+
+    /// 返回携带指定凭据的新客户端。
+    public func withCredentials(_ credentials: SvnCredentials?) -> SvnClient {
+        var options = authOptions
+        options.credentials = credentials
+        return SvnClient(executable: executable, authOptions: options)
     }
 
     // MARK: - 查询命令
@@ -39,6 +49,58 @@ public struct SvnClient: Sendable {
         let target = path.isFileURL ? path.path : path.absoluteString
         let result = try await run(["info", "--xml", target])
         return try InfoXMLParser.parse(result.standardOutput)
+    }
+
+    /// 提交日志。
+    /// - Parameters:
+    ///   - target: 工作副本路径或仓库 URL。
+    ///   - limit: 最多返回条数（分页加载用）。
+    ///   - revisionRange: 版本范围（如 "HEAD:1"、"5:1"），nil 为默认。
+    ///   - verbose: 是否包含每个版本的变更文件列表。
+    public func log(
+        at target: String,
+        limit: Int? = nil,
+        revisionRange: String? = nil,
+        verbose: Bool = true
+    ) async throws -> [SvnLogEntry] {
+        var args = ["log", "--xml", target]
+        if verbose {
+            args.append("--verbose")
+        }
+        if let limit {
+            args += ["--limit", String(limit)]
+        }
+        if let revisionRange {
+            args += ["--revision", revisionRange]
+        }
+        let result = try await run(args)
+        return try LogXMLParser.parse(result.standardOutput)
+    }
+
+    /// 列出仓库目录内容（不检出，仓库浏览器用）。
+    public func list(_ target: String, revision: String? = nil) async throws -> [SvnListEntry] {
+        var args = ["list", "--xml", target]
+        if let revision {
+            args += ["--revision", revision]
+        }
+        let result = try await run(args)
+        return try ListXMLParser.parse(result.standardOutput)
+    }
+
+    /// 读取文件内容（可指定版本，查看历史版本用）。
+    public func cat(_ target: String, revision: String? = nil) async throws -> Data {
+        var args = ["cat", target]
+        if let revision {
+            args += ["--revision", revision]
+        }
+        let result = try await run(args)
+        return result.standardOutput
+    }
+
+    /// 统一 diff 文本（不带参数为整个工作副本的本地修改）。
+    public func diff(at workingCopy: URL, paths: [String] = []) async throws -> String {
+        let result = try await run(["diff"] + paths, in: workingCopy)
+        return result.stdoutText
     }
 
     // MARK: - 修改命令
@@ -88,13 +150,42 @@ public struct SvnClient: Sendable {
         try await run(args + paths, in: workingCopy)
     }
 
+    /// 删除受版本控制的文件/目录。
+    public func delete(paths: [String], in workingCopy: URL) async throws {
+        try await run(["delete"] + paths, in: workingCopy)
+    }
+
+    /// 受版本控制的移动/重命名。
+    public func move(from source: String, to destination: String, in workingCopy: URL) async throws {
+        try await run(["move", source, destination], in: workingCopy)
+    }
+
+    /// 清理工作副本（解除残留锁定）。
+    public func cleanup(at workingCopy: URL) async throws {
+        try await run(["cleanup"], in: workingCopy)
+    }
+
+    /// 导出干净副本（不含 .svn）。
+    public func export(_ target: String, to destination: URL, revision: String? = nil) async throws {
+        var args = ["export", target, destination.path]
+        if let revision {
+            args += ["--revision", revision]
+        }
+        try await run(args)
+    }
+
     // MARK: - 底层执行
+
+    /// 组装最终命令行参数（业务参数 + 认证参数 + --non-interactive）。
+    func makeArguments(_ arguments: [String]) -> [String] {
+        arguments + authOptions.arguments + ["--non-interactive"]
+    }
 
     @discardableResult
     func run(_ arguments: [String], in directory: URL? = nil) async throws -> ProcessResult {
         let result = try await ProcessRunner.run(
             executable: executable,
-            arguments: arguments + ["--non-interactive"],
+            arguments: makeArguments(arguments),
             currentDirectory: directory
         )
         guard result.exitCode == 0 else {

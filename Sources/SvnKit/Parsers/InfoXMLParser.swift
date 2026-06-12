@@ -42,7 +42,7 @@ public enum InfoXMLParser {
             lastCommitRevision = commit.attribute(forName: "revision")?.stringValue.flatMap(Int.init)
             lastCommitAuthor = commit.elements(forName: "author").first?.stringValue
             if let dateString = commit.elements(forName: "date").first?.stringValue {
-                lastCommitDate = Self.parseDate(dateString)
+                lastCommitDate = SvnDateParser.parse(dateString)
             }
         }
 
@@ -60,14 +60,4 @@ public enum InfoXMLParser {
         )
     }
 
-    /// svn 输出的日期格式形如 `2026-06-12T02:33:10.123456Z`。
-    static func parseDate(_ string: String) -> Date? {
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        if let date = formatter.date(from: string) {
-            return date
-        }
-        formatter.formatOptions = [.withInternetDateTime]
-        return formatter.date(from: string)
-    }
 }
