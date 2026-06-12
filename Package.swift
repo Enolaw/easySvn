@@ -7,12 +7,18 @@ let package = Package(
         .macOS(.v13)
     ],
     products: [
-        .library(name: "SvnKit", targets: ["SvnKit"])
+        .library(name: "SvnKit", targets: ["SvnKit"]),
+        .executable(name: "EasySvnApp", targets: ["EasySvnApp"])
     ],
     targets: [
         .target(
             name: "SvnKit",
             path: "Sources/SvnKit"
+        ),
+        .executableTarget(
+            name: "EasySvnApp",
+            dependencies: ["SvnKit"],
+            path: "Sources/EasySvnApp"
         ),
         .testTarget(
             name: "SvnKitTests",

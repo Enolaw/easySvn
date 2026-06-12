@@ -12,6 +12,10 @@ macOS 原生 SVN 图形化客户端（开发中），对标 Windows 平台的 To
 ```
 easySvn/
 ├── Package.swift              # Swift Package 清单
+├── Sources/EasySvnApp/        # SwiftUI 图形界面（开发期可执行 target）
+│   ├── Models/ Stores/        # 工作副本书签与持久化
+│   ├── ViewModels/            # 状态加载
+│   └── Views/                 # 侧边栏 + 状态列表
 ├── Sources/SvnKit/            # SVN 引擎层（封装 svn 命令行）
 │   ├── ProcessRunner.swift    # 异步子进程执行器（支持取消）
 │   ├── SvnBinaryLocator.swift # svn/svnadmin 可执行文件探测
@@ -31,12 +35,22 @@ easySvn/
 - macOS 13+，Xcode 16+（需要完整版 Xcode，Swift Testing 依赖）
 - Subversion 命令行工具：`brew install subversion`
 
-## 构建与测试
+## 运行图形界面
 
 ```bash
 # 如果 xcode-select 指向 CommandLineTools，需要指定 DEVELOPER_DIR
 export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
 
+swift run EasySvnApp
+```
+
+或用 Xcode 打开（`open Package.swift -a Xcode`），选择 `EasySvnApp` scheme 后按 ⌘R。
+
+窗口打开后点击左下角"添加工作副本"，选择任意本地 SVN 工作副本目录，即可看到该目录的修改状态。
+
+## 构建与测试
+
+```bash
 swift build
 swift test
 ```
@@ -48,8 +62,9 @@ swift test
 
 - [x] M1：SVN 引擎层第一个闭环（进程执行器 + status/info XML 解析 + 基本命令）
 - [x] M1：引擎层补全（log/list 解析、diff/cat/export/delete/move/cleanup、认证注入、Keychain 凭据存储），29 项测试
-- [ ] M2：MVP 界面（工作副本管理、状态视图、提交、日志）
-- [ ] FinderSync 徽章技术验证（需 App target，随 M2 进行）
+- [x] M2：最小可运行界面（侧边栏工作副本书签 + 文件状态列表，⌘R 刷新）
+- [ ] M2：Update / Commit / Revert 操作、Diff 视图、日志查看器
+- [ ] FinderSync 徽章技术验证（需 Xcode App target，后续迁移时进行）
 
 ## 引擎层使用示例
 
