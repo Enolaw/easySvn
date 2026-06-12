@@ -103,6 +103,12 @@ public struct SvnClient: Sendable {
         return result.stdoutText
     }
 
+    /// 查看某次提交对指定路径的变更（`svn diff -c REV path`）。
+    public func diffChange(revision: Int, path: String, in workingCopy: URL) async throws -> String {
+        let result = try await run(["diff", "-c", String(revision), path], in: workingCopy)
+        return result.stdoutText
+    }
+
     // MARK: - 修改命令
 
     /// 检出仓库到本地目录。
@@ -132,13 +138,14 @@ public struct SvnClient: Sendable {
         return nil
     }
 
-    /// 更新工作副本，返回更新后的版本号（无法解析时为 nil）。
+    /// 更新工作副本（可指定路径），返回更新后的版本号（无法解析时为 nil）。
     @discardableResult
-    public func update(at workingCopy: URL, revision: String? = nil) async throws -> Int? {
+    public func update(at workingCopy: URL, paths: [String] = [], revision: String? = nil) async throws -> Int? {
         var args = ["update"]
         if let revision {
             args += ["--revision", revision]
         }
+        args += paths
         let result = try await run(args, in: workingCopy)
         // 输出末行形如 "Updated to revision 5." 或 "At revision 5."
         if let range = result.stdoutText.range(

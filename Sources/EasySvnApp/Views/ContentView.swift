@@ -15,7 +15,7 @@ struct ContentView: View {
                 .navigationSplitViewColumnWidth(min: 180, ideal: 220)
         } detail: {
             if let workingCopy = selectedWorkingCopy {
-                StatusListView(workingCopy: workingCopy)
+                WorkingCopyDetailView(workingCopy: workingCopy)
             } else {
                 emptyPlaceholder
             }

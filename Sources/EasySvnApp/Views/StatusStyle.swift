@@ -47,4 +47,22 @@ extension SvnItemStatus {
         default: "circle"
         }
     }
+
+    /// 列表按状态排序时的优先级（数值越小越靠前）。
+    var sortPriority: Int {
+        switch self {
+        case .conflicted, .obstructed: 0
+        case .missing: 1
+        case .deleted: 2
+        case .replaced: 3
+        case .modified: 4
+        case .added: 5
+        case .unversioned: 6
+        case .ignored: 7
+        case .external: 8
+        case .incomplete: 9
+        case .merged: 10
+        case .normal, .none: 99
+        }
+    }
 }

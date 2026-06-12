@@ -63,7 +63,9 @@ swift test
 - [x] M1：SVN 引擎层第一个闭环（进程执行器 + status/info XML 解析 + 基本命令）
 - [x] M1：引擎层补全（log/list 解析、diff/cat/export/delete/move/cleanup、认证注入、Keychain 凭据存储），29 项测试
 - [x] M2：最小可运行界面（侧边栏工作副本书签 + 文件状态列表，⌘R 刷新）
-- [ ] M2：Update / Commit / Revert 操作、Diff 视图、日志查看器
+- [x] M2：Update / Commit / Revert、按状态排序、未版本控制/缺失批量操作、全选、URL 中文解码
+- [x] M2：Diff 视图（双击/右键查看本地差异）、日志查看器（分页、搜索、变更文件 diff）
+- [ ] M2：Checkout 向导、认证设置、FSEvents 自动刷新
 - [ ] FinderSync 徽章技术验证（需 Xcode App target，后续迁移时进行）
 
 ## 引擎层使用示例
