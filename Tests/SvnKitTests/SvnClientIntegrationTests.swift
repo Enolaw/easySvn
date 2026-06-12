@@ -76,7 +76,8 @@ struct SvnClientIntegrationTests {
         try repo.write("a.txt", contents: "a\n")
         try await client.add(paths: ["a.txt"], in: repo.workingCopy)
         try await client.commit(message: "first commit", in: repo.workingCopy)
-        try await client.update(at: repo.workingCopy)
+        let updatedRevision = try await client.update(at: repo.workingCopy)
+        #expect(updatedRevision == 1)
 
         let info = try await client.info(at: repo.workingCopy)
         #expect(info.revision == 1)

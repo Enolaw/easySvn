@@ -132,13 +132,22 @@ public struct SvnClient: Sendable {
         return nil
     }
 
-    /// 更新工作副本。
-    public func update(at workingCopy: URL, revision: String? = nil) async throws {
+    /// 更新工作副本，返回更新后的版本号（无法解析时为 nil）。
+    @discardableResult
+    public func update(at workingCopy: URL, revision: String? = nil) async throws -> Int? {
         var args = ["update"]
         if let revision {
             args += ["--revision", revision]
         }
-        try await run(args, in: workingCopy)
+        let result = try await run(args, in: workingCopy)
+        // 输出末行形如 "Updated to revision 5." 或 "At revision 5."
+        if let range = result.stdoutText.range(
+            of: #"(Updated to|At) revision (\d+)"#,
+            options: .regularExpression
+        ) {
+            return Int(result.stdoutText[range].filter(\.isNumber))
+        }
+        return nil
     }
 
     /// 还原本地修改。
