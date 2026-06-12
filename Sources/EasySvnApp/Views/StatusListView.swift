@@ -5,13 +5,29 @@ import SvnKit
 /// 选中工作副本的状态视图：信息头 + 变更文件列表 + 操作工具栏。
 struct StatusListView: View {
     let workingCopy: WorkingCopy
+    var refreshToken: UUID = UUID()
 
+    @EnvironmentObject private var authStore: AuthSettingsStore
+    @EnvironmentObject private var appSettings: AppSettingsStore
     @StateObject private var viewModel = StatusViewModel()
+    @State private var externalDiffError: String?
+    @State private var fileWatcher = WorkingCopyFileWatcher()
     @State private var showCommitSheet = false
     @State private var revertCandidates: [String] = []
     @State private var showRevertConfirm = false
     @State private var diffPath: String?
+    @State private var conflictPresentation: ConflictPresentation?
     @State private var expandedPaths: Set<String> = []
+
+    private struct ConflictPresentation: Identifiable {
+        let id = UUID()
+        let path: String
+        let isTreeConflict: Bool
+    }
+
+    private var statusTaskID: String {
+        "\(workingCopy.id.uuidString)-\(refreshToken.uuidString)"
+    }
 
     var body: some View {
         Group {
@@ -20,8 +36,12 @@ struct StatusListView: View {
             } else {
                 VStack(spacing: 0) {
                     infoHeader
-                    if hasBatchActions {
-                        batchActionBar
+                    if !viewModel.conflictedEntries.isEmpty {
+                        conflictActionBar
+                        Divider()
+                    }
+                    if !viewModel.massAddedVenvRoots.isEmpty {
+                        venvWarningBar
                         Divider()
                     }
                     listHeader
@@ -32,8 +52,20 @@ struct StatusListView: View {
         }
         .navigationTitle(workingCopy.name)
         .toolbar { toolbarContent }
-        .task(id: workingCopy.id) {
-            await viewModel.refresh(workingCopy: workingCopy)
+        .task(id: statusTaskID) {
+            viewModel.configure(authStore: authStore, appSettings: appSettings)
+            startFileWatcherIfNeeded()
+            viewModel.requestRefresh(workingCopy: workingCopy)
+        }
+        .onChange(of: appSettings.showIgnored) { _ in
+            viewModel.requestRefresh(workingCopy: workingCopy)
+        }
+        .onDisappear {
+            fileWatcher.stop()
+            viewModel.cancelRefresh()
+        }
+        .onChange(of: authStore.autoRefreshEnabled) { _ in
+            startFileWatcherIfNeeded()
         }
         .sheet(isPresented: $showCommitSheet) {
             CommitSheet(
@@ -66,6 +98,14 @@ struct StatusListView: View {
         } message: {
             Text(viewModel.operationError ?? "")
         }
+        .alert("无法打开外部工具", isPresented: Binding(
+            get: { externalDiffError != nil },
+            set: { if !$0 { externalDiffError = nil } }
+        )) {
+            Button("好") { externalDiffError = nil }
+        } message: {
+            Text(externalDiffError ?? "")
+        }
         .sheet(isPresented: Binding(
             get: { diffPath != nil },
             set: { if !$0 { diffPath = nil } }
@@ -78,10 +118,15 @@ struct StatusListView: View {
                 )
             }
         }
-    }
-
-    private var hasBatchActions: Bool {
-        !viewModel.selectedUnversionedPaths.isEmpty || !viewModel.selectedMissingPaths.isEmpty
+        .sheet(item: $conflictPresentation) { item in
+            ConflictMergeView(
+                workingCopy: workingCopy,
+                path: item.path,
+                isTreeConflict: item.isTreeConflict
+            ) {
+                await viewModel.refresh(workingCopy: workingCopy)
+            }
+        }
     }
 
     // MARK: - 工具栏
@@ -97,6 +142,23 @@ struct StatusListView: View {
             .help("勾选全部变更项（⌘A）")
             .keyboardShortcut("a", modifiers: .command)
             .disabled(viewModel.isLoading || viewModel.entries.isEmpty)
+        }
+
+        ToolbarItem(placement: .automatic) {
+            Toggle(isOn: $appSettings.showIgnored) {
+                Label("显示已忽略", systemImage: "eye.slash")
+            }
+            .help("在变更列表中显示 svn:ignore 匹配的文件")
+            .disabled(viewModel.isLoading)
+        }
+
+        if !viewModel.conflictedEntries.isEmpty {
+            ToolbarItem(placement: .automatic) {
+                Toggle(isOn: $viewModel.showConflictsOnly) {
+                    Label("仅冲突", systemImage: "exclamationmark.triangle")
+                }
+                .help("仅显示冲突文件")
+            }
         }
 
         ToolbarItem(placement: .automatic) {
@@ -134,70 +196,221 @@ struct StatusListView: View {
             .keyboardShortcut("k", modifiers: .command)
             .disabled(viewModel.isLoading || viewModel.selectedCommittablePaths.isEmpty)
 
-            Button {
-                Task { await viewModel.refresh(workingCopy: workingCopy) }
-            } label: {
-                Label("刷新", systemImage: "arrow.clockwise")
+            if viewModel.isLoading {
+                Button {
+                    viewModel.cancelRefresh()
+                } label: {
+                    Label("取消", systemImage: "xmark.circle")
+                }
+                .help("取消状态扫描")
+            } else {
+                Button {
+                    viewModel.requestRefresh(workingCopy: workingCopy)
+                } label: {
+                    Label("刷新", systemImage: "arrow.clockwise")
+                }
+                .help("刷新状态（⌘R）")
+                .keyboardShortcut("r", modifiers: .command)
             }
-            .help("刷新状态（⌘R）")
-            .keyboardShortcut("r", modifiers: .command)
-            .disabled(viewModel.isLoading)
         }
     }
 
-    // MARK: - 批量操作条
+    // MARK: - 冲突操作条
 
-    private var batchActionBar: some View {
+    private var conflictActionBar: some View {
         HStack(spacing: 10) {
-            if !viewModel.selectedUnversionedPaths.isEmpty {
-                Text("未版本控制 \(viewModel.selectedUnversionedPaths.count) 项")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                Button("加入版本控制") {
-                    let paths = viewModel.selectedUnversionedPaths
-                    Task { await viewModel.addToVersionControl(workingCopy: workingCopy, paths: paths) }
+            Label("\(viewModel.conflictedEntries.count) 个冲突", systemImage: "exclamationmark.triangle.fill")
+                .font(.callout.weight(.medium))
+                .foregroundStyle(.orange)
+            Button("打开合并…") {
+                if let first = viewModel.conflictedEntries.first {
+                    openConflict(first)
                 }
-                .disabled(viewModel.isLoading)
-                Button("加入并提交…") {
-                    let paths = viewModel.selectedUnversionedPaths
-                    Task {
-                        if await viewModel.addUnversionedAndPrepareCommit(workingCopy: workingCopy, paths: paths) {
-                            showCommitSheet = true
-                        }
-                    }
-                }
-                .disabled(viewModel.isLoading)
             }
-
-            if !viewModel.selectedUnversionedPaths.isEmpty && !viewModel.selectedMissingPaths.isEmpty {
-                Divider().frame(height: 16)
-            }
-
-            if !viewModel.selectedMissingPaths.isEmpty {
-                Text("缺失 \(viewModel.selectedMissingPaths.count) 项")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                Button("从仓库恢复") {
-                    let paths = viewModel.selectedMissingPaths
-                    Task { await viewModel.restoreMissing(workingCopy: workingCopy, paths: paths) }
-                }
-                .disabled(viewModel.isLoading)
-                Button("提交删除…") {
-                    let paths = viewModel.selectedMissingPaths
-                    Task {
-                        if await viewModel.scheduleDeletionForMissing(workingCopy: workingCopy, paths: paths) {
-                            showCommitSheet = true
-                        }
-                    }
-                }
-                .disabled(viewModel.isLoading)
-            }
-
+            .disabled(viewModel.isLoading)
             Spacer()
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 8)
-        .background(Color.orange.opacity(0.08))
+        .background(Color.orange.opacity(0.1))
+    }
+
+    // MARK: - .venv 误添加提示
+
+    private var venvWarningBar: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(.orange)
+            Text("检测到 `.venv` 已被加入版本控制，会导致扫描极慢")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            ForEach(viewModel.massAddedVenvRoots, id: \.self) { root in
+                Button("取消并忽略") {
+                    Task { await viewModel.fixMassAddedVenv(workingCopy: workingCopy, root: root) }
+                }
+                .disabled(viewModel.isLoading)
+            }
+            Spacer()
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
+        .background(Color.orange.opacity(0.1))
+    }
+
+    // MARK: - 选中项操作条（单一入口，按状态分组）
+
+    private var selectionActionBar: some View {
+        HStack(spacing: 12) {
+            Text(viewModel.selectionSummary.summaryText)
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .animation(.none, value: viewModel.selectionSummary.summaryText)
+            Spacer()
+            if viewModel.selectionSummary.categoryCount == 1 {
+                selectionPrimaryButton
+                selectionSecondaryMenu
+            } else {
+                selectionActionsMenu(label: "操作选中项…")
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
+        .background(Color.accentColor.opacity(0.06))
+    }
+
+    @ViewBuilder
+    private var selectionPrimaryButton: some View {
+        if !viewModel.selectedUnversionedPaths.isEmpty {
+            Button("加入版本控制") {
+                let paths = viewModel.selectedUnversionedPaths
+                Task { await viewModel.addToVersionControl(workingCopy: workingCopy, paths: paths) }
+            }
+            .disabled(viewModel.isLoading)
+        } else if !viewModel.selectedAddedPaths.isEmpty {
+            Button("撤销添加") {
+                let paths = viewModel.selectedAddedPaths
+                Task { await viewModel.cancelScheduledAdd(workingCopy: workingCopy, paths: paths) }
+            }
+            .disabled(viewModel.isLoading)
+        } else if !viewModel.selectedMissingPaths.isEmpty {
+            Button("从仓库恢复") {
+                let paths = viewModel.selectedMissingPaths
+                Task { await viewModel.restoreMissing(workingCopy: workingCopy, paths: paths) }
+            }
+            .disabled(viewModel.isLoading)
+        } else if !viewModel.selectedIgnoredPaths.isEmpty {
+            Button("取消忽略") {
+                let paths = viewModel.selectedIgnoredPaths
+                Task { await viewModel.removeFromIgnoreList(workingCopy: workingCopy, paths: paths) }
+            }
+            .disabled(viewModel.isLoading)
+        }
+    }
+
+    @ViewBuilder
+    private var selectionSecondaryMenu: some View {
+        if !viewModel.selectedUnversionedPaths.isEmpty {
+            Menu("更多") {
+                unversionedActionButtons(paths: viewModel.selectedUnversionedPaths, includeAdd: false)
+            }
+            .disabled(viewModel.isLoading)
+        } else if !viewModel.selectedAddedPaths.isEmpty {
+            Menu("更多") {
+                addedActionButtons(paths: viewModel.selectedAddedPaths, includeRevert: false)
+            }
+            .disabled(viewModel.isLoading)
+        } else if !viewModel.selectedMissingPaths.isEmpty {
+            Menu("更多") {
+                missingActionButtons(paths: viewModel.selectedMissingPaths, includeRestore: false)
+            }
+            .disabled(viewModel.isLoading)
+        } else if !viewModel.selectedIgnoredPaths.isEmpty {
+            EmptyView()
+        }
+    }
+
+    private func selectionActionsMenu(label: String) -> some View {
+        Menu {
+            if !viewModel.selectedUnversionedPaths.isEmpty {
+                Section("未版本控制（\(viewModel.selectedUnversionedPaths.count)）") {
+                    unversionedActionButtons(paths: viewModel.selectedUnversionedPaths, includeAdd: true)
+                }
+            }
+            if !viewModel.selectedAddedPaths.isEmpty {
+                Section("新增（\(viewModel.selectedAddedPaths.count)）") {
+                    addedActionButtons(paths: viewModel.selectedAddedPaths, includeRevert: true)
+                }
+            }
+            if !viewModel.selectedMissingPaths.isEmpty {
+                Section("缺失（\(viewModel.selectedMissingPaths.count)）") {
+                    missingActionButtons(paths: viewModel.selectedMissingPaths, includeRestore: true)
+                }
+            }
+            if !viewModel.selectedIgnoredPaths.isEmpty {
+                Section("已忽略（\(viewModel.selectedIgnoredPaths.count)）") {
+                    ignoredActionButtons(paths: viewModel.selectedIgnoredPaths, includeRemove: true)
+                }
+            }
+        } label: {
+            Text(label)
+        }
+        .disabled(viewModel.isLoading)
+    }
+
+    @ViewBuilder
+    private func unversionedActionButtons(paths: [String], includeAdd: Bool) -> some View {
+        if includeAdd {
+            Button("加入版本控制") {
+                Task { await viewModel.addToVersionControl(workingCopy: workingCopy, paths: paths) }
+            }
+        }
+        Button("加入并提交…") {
+            Task {
+                if await viewModel.addUnversionedAndPrepareCommit(workingCopy: workingCopy, paths: paths) {
+                    showCommitSheet = true
+                }
+            }
+        }
+        Button("忽略") {
+            Task { await viewModel.addToIgnoreList(workingCopy: workingCopy, paths: paths) }
+        }
+    }
+
+    @ViewBuilder
+    private func addedActionButtons(paths: [String], includeRevert: Bool) -> some View {
+        if includeRevert {
+            Button("撤销添加") {
+                Task { await viewModel.cancelScheduledAdd(workingCopy: workingCopy, paths: paths) }
+            }
+        }
+        Button("忽略") {
+            Task { await viewModel.addToIgnoreList(workingCopy: workingCopy, paths: paths) }
+        }
+    }
+
+    @ViewBuilder
+    private func missingActionButtons(paths: [String], includeRestore: Bool) -> some View {
+        if includeRestore {
+            Button("从仓库恢复") {
+                Task { await viewModel.restoreMissing(workingCopy: workingCopy, paths: paths) }
+            }
+        }
+        Button("提交删除…", role: .destructive) {
+            Task {
+                if await viewModel.scheduleDeletionForMissing(workingCopy: workingCopy, paths: paths) {
+                    showCommitSheet = true
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func ignoredActionButtons(paths: [String], includeRemove: Bool) -> some View {
+        if includeRemove {
+            Button("取消忽略") {
+                Task { await viewModel.removeFromIgnoreList(workingCopy: workingCopy, paths: paths) }
+            }
+        }
     }
 
     // MARK: - 信息头
@@ -227,8 +440,15 @@ struct StatusListView: View {
                     .lineLimit(2)
             }
             if viewModel.isLoading {
-                ProgressView()
-                    .controlSize(.small)
+                HStack(spacing: 6) {
+                    ProgressView()
+                        .controlSize(.small)
+                    if let message = viewModel.loadingMessage {
+                        Text(message)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
             }
         }
         .padding(.horizontal, 14)
@@ -285,7 +505,7 @@ struct StatusListView: View {
 
     private var treeRefreshKey: String {
         viewModel.entries
-            .map { "\($0.path)|\($0.itemStatus.rawValue)" }
+            .map { "\($0.path)|\($0.itemStatus.rawValue)|\($0.propsStatus.rawValue)" }
             .joined(separator: ";")
     }
 
@@ -293,12 +513,22 @@ struct StatusListView: View {
 
     @ViewBuilder
     private var listContent: some View {
-        if viewModel.entries.isEmpty && !viewModel.isLoading {
+        if viewModel.isLoading && viewModel.sortedEntries.isEmpty {
+            VStack(spacing: 12) {
+                ProgressView()
+                Text(viewModel.loadingMessage ?? "正在扫描变更…")
+                    .foregroundStyle(.secondary)
+                Button("取消") {
+                    viewModel.cancelRefresh()
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else if viewModel.sortedEntries.isEmpty {
             VStack(spacing: 10) {
-                Image(systemName: "checkmark.circle")
+                Image(systemName: viewModel.showConflictsOnly ? "checkmark.circle" : "checkmark.circle")
                     .font(.system(size: 40))
                     .foregroundStyle(.green)
-                Text("没有本地修改")
+                Text(viewModel.showConflictsOnly ? "没有冲突文件" : "没有本地修改")
                     .foregroundStyle(.secondary)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -311,10 +541,27 @@ struct StatusListView: View {
                 }
             }
             .listStyle(.inset)
+            .safeAreaInset(edge: .top, spacing: 0) {
+                selectionActionInset
+                    .animation(.easeInOut(duration: 0.18), value: viewModel.selectionSummary.hasActions)
+            }
+            .animation(.none, value: viewModel.selectionSummary.totalCount)
             .onAppear(perform: expandAllFolders)
             .onChange(of: treeRefreshKey) { _ in
                 expandAllFolders()
             }
+        }
+    }
+
+    @ViewBuilder
+    private var selectionActionInset: some View {
+        if viewModel.selectionSummary.hasActions {
+            VStack(spacing: 0) {
+                selectionActionBar
+                Divider()
+            }
+            .background(.background)
+            .transition(.opacity)
         }
     }
 
@@ -332,8 +579,11 @@ struct StatusListView: View {
         )
         .contextMenu { rowMenu(for: node) }
         .onTapGesture(count: 2) {
-            if let entry = node.entry, node.children.isEmpty, canShowDiff(entry) {
-                diffPath = entry.path
+            guard let entry = node.entry, node.children.isEmpty else { return }
+            if StatusViewModel.isConflicted(entry) {
+                openConflict(entry)
+            } else if canShowDiff(entry) {
+                openDiff(for: entry.path)
             }
         }
     }
@@ -358,24 +608,53 @@ struct StatusListView: View {
             }
             let missing = node.allEntries.filter { $0.itemStatus == .missing }.map(\.path)
             if !missing.isEmpty {
-                Button("从仓库恢复（\(missing.count) 项）") {
-                    Task { await viewModel.restoreMissing(workingCopy: workingCopy, paths: missing) }
-                }
-                Button("提交删除…", role: .destructive) {
-                    Task {
-                        if await viewModel.scheduleDeletionForMissing(workingCopy: workingCopy, paths: missing) {
-                            showCommitSheet = true
+                Section("缺失（\(missing.count)）") {
+                    Button("从仓库恢复") {
+                        Task { await viewModel.restoreMissing(workingCopy: workingCopy, paths: missing) }
+                    }
+                    Button("提交删除…", role: .destructive) {
+                        Task {
+                            if await viewModel.scheduleDeletionForMissing(workingCopy: workingCopy, paths: missing) {
+                                showCommitSheet = true
+                            }
                         }
                     }
                 }
             }
             let unversioned = node.allEntries.filter { $0.itemStatus == .unversioned }.map(\.path)
             if !unversioned.isEmpty {
-                Button("加入并提交…") {
-                    Task {
-                        if await viewModel.addUnversionedAndPrepareCommit(workingCopy: workingCopy, paths: unversioned) {
-                            showCommitSheet = true
+                Section("未版本控制（\(unversioned.count)）") {
+                    Button("加入版本控制") {
+                        Task { await viewModel.addToVersionControl(workingCopy: workingCopy, paths: unversioned) }
+                    }
+                    Button("加入并提交…") {
+                        Task {
+                            if await viewModel.addUnversionedAndPrepareCommit(workingCopy: workingCopy, paths: unversioned) {
+                                showCommitSheet = true
+                            }
                         }
+                    }
+                    Button("忽略") {
+                        Task { await viewModel.addToIgnoreList(workingCopy: workingCopy, paths: unversioned) }
+                    }
+                }
+            }
+            let added = node.allEntries.filter { $0.itemStatus == .added }.map(\.path)
+            if !added.isEmpty {
+                Section("新增（\(added.count)）") {
+                    Button("撤销添加") {
+                        Task { await viewModel.cancelScheduledAdd(workingCopy: workingCopy, paths: added) }
+                    }
+                    Button("忽略") {
+                        Task { await viewModel.addToIgnoreList(workingCopy: workingCopy, paths: added) }
+                    }
+                }
+            }
+            let ignored = node.allEntries.filter { $0.itemStatus == .ignored }.map(\.path)
+            if !ignored.isEmpty {
+                Section("已忽略（\(ignored.count)）") {
+                    Button("取消忽略") {
+                        Task { await viewModel.removeFromIgnoreList(workingCopy: workingCopy, paths: ignored) }
                     }
                 }
             }
@@ -393,38 +672,93 @@ struct StatusListView: View {
         }
     }
 
+    private func openConflict(_ entry: SvnStatusEntry) {
+        conflictPresentation = ConflictPresentation(
+            path: entry.path,
+            isTreeConflict: entry.isTreeConflicted
+        )
+    }
+
     @ViewBuilder
     private func entryRowMenu(for entry: SvnStatusEntry) -> some View {
+        if StatusViewModel.isConflicted(entry) {
+            Button("解决冲突…") {
+                openConflict(entry)
+            }
+            Button("采用我的") {
+                Task { await viewModel.resolveConflict(workingCopy: workingCopy, path: entry.path, accept: .mineFull) }
+            }
+            Button("采用对方") {
+                Task { await viewModel.resolveConflict(workingCopy: workingCopy, path: entry.path, accept: .theirsFull) }
+            }
+            Button("标记已解决") {
+                Task { await viewModel.markConflictResolved(workingCopy: workingCopy, path: entry.path) }
+            }
+            Divider()
+        }
         if canShowDiff(entry) {
-            Button("查看差异") {
-                diffPath = entry.path
+            Button(appSettings.preferExternalDiff && appSettings.hasExternalDiffTool ? "使用外部工具查看差异" : "查看差异") {
+                openDiff(for: entry.path)
+            }
+            if appSettings.hasExternalDiffTool && !appSettings.preferExternalDiff {
+                Button("使用外部工具查看差异") {
+                    Task { await openExternalDiff(path: entry.path) }
+                }
+            } else if appSettings.hasExternalDiffTool {
+                Button("在内置查看器中查看") {
+                    diffPath = entry.path
+                }
+            }
+        }
+        if entry.itemStatus == .added {
+            Section("新增") {
+                Button("撤销添加") {
+                    Task { await viewModel.cancelScheduledAdd(workingCopy: workingCopy, paths: [entry.path]) }
+                }
+                Button("忽略") {
+                    Task { await viewModel.addToIgnoreList(workingCopy: workingCopy, paths: [entry.path]) }
+                }
             }
         }
         if entry.itemStatus == .unversioned {
-            Button("加入版本控制") {
-                Task { await viewModel.addToVersionControl(workingCopy: workingCopy, paths: [entry.path]) }
-            }
-            Button("加入并提交…") {
-                Task {
-                    if await viewModel.addUnversionedAndPrepareCommit(workingCopy: workingCopy, paths: [entry.path]) {
-                        showCommitSheet = true
+            Section("未版本控制") {
+                Button("加入版本控制") {
+                    Task { await viewModel.addToVersionControl(workingCopy: workingCopy, paths: [entry.path]) }
+                }
+                Button("加入并提交…") {
+                    Task {
+                        if await viewModel.addUnversionedAndPrepareCommit(workingCopy: workingCopy, paths: [entry.path]) {
+                            showCommitSheet = true
+                        }
                     }
+                }
+                Button("忽略") {
+                    Task { await viewModel.addToIgnoreList(workingCopy: workingCopy, paths: [entry.path]) }
                 }
             }
         }
         if entry.itemStatus == .missing {
-            Button("从仓库恢复") {
-                Task { await viewModel.restoreMissing(workingCopy: workingCopy, paths: [entry.path]) }
-            }
-            Button("提交删除…", role: .destructive) {
-                Task {
-                    if await viewModel.scheduleDeletionForMissing(workingCopy: workingCopy, paths: [entry.path]) {
-                        showCommitSheet = true
+            Section("缺失") {
+                Button("从仓库恢复") {
+                    Task { await viewModel.restoreMissing(workingCopy: workingCopy, paths: [entry.path]) }
+                }
+                Button("提交删除…", role: .destructive) {
+                    Task {
+                        if await viewModel.scheduleDeletionForMissing(workingCopy: workingCopy, paths: [entry.path]) {
+                            showCommitSheet = true
+                        }
                     }
                 }
             }
         }
-        if StatusViewModel.isCommittable(entry.itemStatus) || entry.itemStatus == .conflicted {
+        if entry.itemStatus == .ignored {
+            Section("已忽略") {
+                Button("取消忽略") {
+                    Task { await viewModel.removeFromIgnoreList(workingCopy: workingCopy, paths: [entry.path]) }
+                }
+            }
+        }
+        if entry.isCommittable || entry.itemStatus == .conflicted {
             Button("还原修改…", role: .destructive) {
                 revertCandidates = [entry.path]
                 showRevertConfirm = true
@@ -448,6 +782,39 @@ struct StatusListView: View {
         }
     }
 
+    private func openDiff(for path: String) {
+        if appSettings.preferExternalDiff && appSettings.hasExternalDiffTool {
+            Task { await openExternalDiff(path: path) }
+        } else {
+            diffPath = path
+        }
+    }
+
+    private func openExternalDiff(path: String) async {
+        do {
+            try await ExternalDiffService.open(
+                kind: .workingCopy(path: path),
+                workingCopy: workingCopy,
+                settings: appSettings,
+                authStore: authStore
+            )
+        } catch {
+            externalDiffError = error.localizedDescription
+        }
+    }
+
+    private func startFileWatcherIfNeeded() {
+        fileWatcher.stop()
+        guard authStore.autoRefreshEnabled else { return }
+        fileWatcher.watch(path: workingCopy.path) { [viewModel] changedPaths in
+            guard !viewModel.shouldSkipWatcherRefresh else { return }
+            viewModel.requestRefresh(
+                workingCopy: workingCopy,
+                changedPaths: changedPaths.isEmpty ? nil : changedPaths
+            )
+        }
+    }
+
     private func errorView(_ message: String) -> some View {
         VStack(spacing: 12) {
             Image(systemName: "exclamationmark.triangle")
@@ -457,7 +824,7 @@ struct StatusListView: View {
                 .multilineTextAlignment(.center)
                 .foregroundStyle(.secondary)
             Button("重试") {
-                Task { await viewModel.refresh(workingCopy: workingCopy) }
+                viewModel.requestRefresh(workingCopy: workingCopy)
             }
         }
         .padding()
@@ -474,7 +841,7 @@ struct StatusTreeRow: View {
         if node.isFolder {
             let count = node.allEntries.count
             if let entry = node.entry {
-                return (entry.itemStatus.symbolName, entry.itemStatus.color, entry.itemStatus.displayName)
+                return (entry.statusSymbolName, entry.statusColor, entry.statusDisplayName)
             }
             let status = node.representativeStatus
             return (
@@ -484,7 +851,10 @@ struct StatusTreeRow: View {
             )
         }
         if let entry = node.entry {
-            return (entry.itemStatus.symbolName, entry.itemStatus.color, entry.itemStatus.displayName)
+            let label = entry.isTreeConflicted && entry.itemStatus != .conflicted
+                ? "树冲突"
+                : entry.statusDisplayName
+            return (entry.statusSymbolName, entry.statusColor, label)
         }
         return ("doc", .secondary, "-")
     }

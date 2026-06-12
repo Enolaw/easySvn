@@ -60,4 +60,37 @@ public struct SvnStatusEntry: Sendable, Equatable {
         self.isCopied = isCopied
         self.isWCLocked = isWCLocked
     }
+
+    /// 属性（如 svn:ignore）已修改。
+    public var hasModifiedProps: Bool {
+        propsStatus == .modified
+    }
+
+    /// 仅属性变更、内容未变（对应 `svn status` 第二列 `M`）。
+    public var isPropsOnlyModified: Bool {
+        switch itemStatus {
+        case .normal, .none:
+            return hasModifiedProps
+        default:
+            return false
+        }
+    }
+
+    /// 列表排序/展示用的状态（属性独占变更时视为 modified）。
+    public var displayStatus: SvnItemStatus {
+        isPropsOnlyModified ? .modified : itemStatus
+    }
+
+    /// 内容维度是否可提交。
+    public static func isCommittableItem(_ status: SvnItemStatus) -> Bool {
+        switch status {
+        case .modified, .added, .deleted, .replaced: true
+        default: false
+        }
+    }
+
+    /// 是否应纳入提交（含仅属性变更的目录/文件）。
+    public var isCommittable: Bool {
+        Self.isCommittableItem(itemStatus) || hasModifiedProps
+    }
 }

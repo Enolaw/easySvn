@@ -22,6 +22,32 @@ public struct SvnError: Error, Sendable, Equatable, CustomStringConvertible {
         public static let workingCopyLocked = 155004
         public static let authnFailed = 170001
         public static let connectionRefused = 175002
+        public static let certVerificationFailed = 230001
+        public static let sslCertProblem = 175013
+        /// 指定版本中不存在该路径（常见于新增文件的上一版本）。
+        public static let pathMissingInRevision = 195012
+    }
+
+    /// 路径在目标版本中不存在（如新增文件查看 r(N-1) 侧）。
+    public var isPathMissingInRevision: Bool {
+        if code == Code.pathMissingInRevision {
+            return true
+        }
+        return message.localizedCaseInsensitiveContains("unable to find repository location")
+    }
+
+    /// 是否为 SSL 证书校验失败。
+    public var isCertificateError: Bool {
+        if let code, code == Code.certVerificationFailed || code == Code.sslCertProblem {
+            return true
+        }
+        let lower = message.lowercased()
+        return lower.contains("certificate") || lower.contains("ssl")
+    }
+
+    /// 是否为认证失败。
+    public var isAuthenticationError: Bool {
+        code == Code.authnFailed
     }
 
     public init(exitCode: Int32, code: Int?, message: String) {

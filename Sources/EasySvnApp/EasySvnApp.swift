@@ -14,12 +14,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 struct EasySvnApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var store = WorkingCopyStore()
+    @StateObject private var authStore = AuthSettingsStore()
+    @StateObject private var appSettings = AppSettingsStore()
 
     var body: some Scene {
         WindowGroup("easySvn") {
             ContentView()
                 .environmentObject(store)
+                .environmentObject(authStore)
+                .environmentObject(appSettings)
+                .preferredColorScheme(appSettings.theme.colorScheme)
+                .environment(\.locale, appSettings.language.locale ?? Locale.current)
                 .frame(minWidth: 760, minHeight: 460)
+        }
+
+        Settings {
+            SettingsView()
+                .environmentObject(authStore)
+                .environmentObject(appSettings)
         }
     }
 }

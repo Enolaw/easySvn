@@ -38,9 +38,25 @@ public struct SvnClient: Sendable {
         return result.stdoutText.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    /// 全量状态扫描超时（含误 add 巨型目录时避免无限等待）。
+    public static let statusTimeout: TimeInterval = 90
+
     /// 工作副本状态（仅变更项，不含 normal 状态文件）。
-    public func status(at workingCopy: URL) async throws -> [SvnStatusEntry] {
-        let result = try await run(["status", "--xml"], in: workingCopy)
+    /// - Parameters:
+    ///   - paths: 非空时仅扫描指定相对路径（大目录增量刷新用）。
+    ///   - includeIgnored: 为 true 时附带 `svn:ignore` 匹配项（`--no-ignore`）。
+    public func status(
+        at workingCopy: URL,
+        paths: [String] = [],
+        includeIgnored: Bool = false
+    ) async throws -> [SvnStatusEntry] {
+        let timeout = paths.isEmpty ? Self.statusTimeout : nil
+        var args = ["status", "--xml"]
+        if includeIgnored {
+            args.append("--no-ignore")
+        }
+        args += paths
+        let result = try await run(args, in: workingCopy, timeout: timeout)
         return try StatusXMLParser.parse(result.standardOutput)
     }
 
@@ -97,6 +113,12 @@ public struct SvnClient: Sendable {
         return result.standardOutput
     }
 
+    /// 读取工作副本内相对路径的 peg 版本内容（如 `foo.txt@BASE`、`bar@12`）。
+    public func cat(path: String, pegRevision: String, in workingCopy: URL) async throws -> Data {
+        let result = try await run(["cat", "\(path)@\(pegRevision)"], in: workingCopy)
+        return result.standardOutput
+    }
+
     /// 统一 diff 文本（不带参数为整个工作副本的本地修改）。
     public func diff(at workingCopy: URL, paths: [String] = []) async throws -> String {
         let result = try await run(["diff"] + paths, in: workingCopy)
@@ -112,12 +134,36 @@ public struct SvnClient: Sendable {
     // MARK: - 修改命令
 
     /// 检出仓库到本地目录。
-    public func checkout(repository: String, to directory: URL, revision: String? = nil) async throws {
+    public func checkout(
+        repository: String,
+        to directory: URL,
+        revision: String? = nil,
+        depth: SvnDepth? = nil,
+        onProgress: (@Sendable (String) -> Void)? = nil
+    ) async throws {
         var args = ["checkout", repository, directory.path]
         if let revision {
             args += ["--revision", revision]
         }
-        try await run(args)
+        if let depth {
+            args += ["--depth", depth.rawValue]
+        }
+
+        if let onProgress {
+            let lineBuffer = LineBuffer()
+            try await run(args, onStderrChunk: { chunk in
+                let text = String(decoding: chunk, as: UTF8.self)
+                for line in lineBuffer.append(text) where !line.isEmpty {
+                    onProgress(line)
+                }
+            })
+            let tail = lineBuffer.flush().trimmingCharacters(in: .whitespacesAndNewlines)
+            if !tail.isEmpty {
+                onProgress(tail)
+            }
+        } else {
+            try await run(args)
+        }
     }
 
     /// 将文件加入版本控制。
@@ -181,6 +227,170 @@ public struct SvnClient: Sendable {
         try await run(["cleanup"], in: workingCopy)
     }
 
+    /// 读取目录/文件属性。
+    public func propget(_ name: String, at path: String, in workingCopy: URL) async throws -> String? {
+        do {
+            let result = try await run(["propget", name, path], in: workingCopy)
+            let text = result.stdoutText.trimmingCharacters(in: .whitespacesAndNewlines)
+            return text.isEmpty ? nil : text
+        } catch let error as SvnError where error.exitCode != 0 {
+            return nil
+        }
+    }
+
+    /// 向目录追加 `svn:ignore` 模式（保留已有项）。
+    public func appendIgnore(patterns: [String], at directory: String, in workingCopy: URL) async throws {
+        let existing = (try? await propget("svn:ignore", at: directory, in: workingCopy)) ?? ""
+        var lines = existing.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        for pattern in patterns where !pattern.isEmpty {
+            if !lines.contains(pattern) {
+                lines.append(pattern)
+            }
+        }
+        while lines.last == "" {
+            lines.removeLast()
+        }
+        let value = lines.joined(separator: "\n")
+        try await run(["propset", "svn:ignore", value, directory], in: workingCopy)
+    }
+
+    /// 从目录的 `svn:ignore` 中移除模式；无剩余项时删除属性。
+    public func removeIgnore(patterns: [String], at directory: String, in workingCopy: URL) async throws {
+        let existing = (try? await propget("svn:ignore", at: directory, in: workingCopy)) ?? ""
+        var lines = existing.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        let removeSet = Set(patterns)
+        lines.removeAll { removeSet.contains($0) }
+        while lines.last == "" {
+            lines.removeLast()
+        }
+        if lines.isEmpty {
+            try await run(["propdel", "svn:ignore", directory], in: workingCopy)
+        } else {
+            let value = lines.joined(separator: "\n")
+            try await run(["propset", "svn:ignore", value, directory], in: workingCopy)
+        }
+    }
+
+    /// 解决冲突（`svn resolve --accept`）。
+    public func resolve(
+        paths: [String],
+        accept: SvnResolveAccept,
+        in workingCopy: URL
+    ) async throws {
+        try await run(["resolve", "--accept=\(accept.rawValue)"] + paths, in: workingCopy)
+    }
+
+    /// 标记冲突已解决（`svn resolved`）。
+    public func markResolved(paths: [String], in workingCopy: URL) async throws {
+        try await run(["resolved"] + paths, in: workingCopy)
+    }
+
+    /// 读取冲突文件的三方文本。
+    public func conflictVersions(for path: String, in workingCopy: URL) -> ConflictVersions {
+        ConflictFileResolver.loadVersions(for: path, in: workingCopy)
+    }
+
+    /// 将合并结果写回工作副本文件。
+    public func writeConflictResult(_ content: String, for path: String, in workingCopy: URL) throws {
+        try ConflictFileResolver.writeWorking(content, for: path, in: workingCopy)
+    }
+
+    // MARK: - 分支 / 合并
+
+    /// 在仓库中创建目录（`svn mkdir --parents`）。
+    public func mkdir(_ url: String, message: String, parents: Bool = true) async throws {
+        var args = ["mkdir"]
+        if parents {
+            args.append("--parents")
+        }
+        try await run(args + [url, "--message", message])
+    }
+
+    /// 远程删除仓库路径（`svn delete URL -m MSG`）。
+    public func deleteRemote(_ url: String, message: String) async throws {
+        try await run(["delete", url, "--message", message])
+    }
+
+    /// 远程移动/重命名（`svn move SRC DEST -m MSG`）。
+    @discardableResult
+    public func moveRemote(from source: String, to destination: String, message: String) async throws -> Int? {
+        let result = try await run(["move", source, destination, "--message", message])
+        return parseCommittedRevision(result.stdoutText)
+    }
+
+    /// 仓库内复制（创建分支/标签）：`svn copy SOURCE DEST -m MSG`。
+    @discardableResult
+    public func copy(from source: String, to destination: String, message: String) async throws -> Int? {
+        let result = try await run(["copy", source, destination, "--message", message])
+        return parseCommittedRevision(result.stdoutText)
+    }
+
+    /// 创建分支/标签：确保 `branches/` 或 `tags/` 存在后执行 copy。
+    @discardableResult
+    public func copyBranchOrTag(
+        from source: String,
+        to destination: String,
+        kind: RepositoryCopyKind,
+        repositoryRoot: String,
+        message: String
+    ) async throws -> Int? {
+        let folderURL = RepositoryURLBuilder.kindFolderURL(repositoryRoot: repositoryRoot, kind: kind)
+        do {
+            try await mkdir(folderURL, message: "ensure \(kind.folderName) folder")
+        } catch let error as SvnError {
+            // 目录已存在时忽略
+            if error.code != 150002 && !error.message.localizedCaseInsensitiveContains("already exists") {
+                throw error
+            }
+        }
+        return try await copy(from: source, to: destination, message: message)
+    }
+
+    /// 切换工作副本到另一分支 URL。
+    @discardableResult
+    public func switchTo(_ url: String, in workingCopy: URL) async throws -> Int? {
+        let result = try await run(["switch", url], in: workingCopy)
+        if let range = result.stdoutText.range(
+            of: #"(Updated to|At) revision (\d+)"#,
+            options: .regularExpression
+        ) {
+            return Int(result.stdoutText[range].filter(\.isNumber))
+        }
+        return nil
+    }
+
+    /// 合并（支持版本范围与 dry-run 预览）。
+    public func merge(
+        source: String,
+        in workingCopy: URL,
+        revisionRange: String? = nil,
+        dryRun: Bool = false
+    ) async throws -> String {
+        var args = ["merge"]
+        if dryRun {
+            args.append("--dry-run")
+        }
+        if let revisionRange {
+            args += ["-r", revisionRange]
+        }
+        args.append(source)
+        let result = try await run(args, in: workingCopy)
+        return result.stdoutText.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// 查询 mergeinfo（已合并 / 可合并版本）。
+    public func mergeinfo(
+        source: String,
+        kind: SvnMergeinfoKind,
+        in workingCopy: URL
+    ) async throws -> [Int] {
+        let result = try await run(
+            ["mergeinfo", "--show-revs", kind.rawValue, source],
+            in: workingCopy
+        )
+        return MergeinfoParser.parseRevisions(result.stdoutText)
+    }
+
     /// 导出干净副本（不含 .svn）。
     public func export(_ target: String, to destination: URL, revision: String? = nil) async throws {
         var args = ["export", target, destination.path]
@@ -188,6 +398,13 @@ public struct SvnClient: Sendable {
             args += ["--revision", revision]
         }
         try await run(args)
+    }
+
+    private func parseCommittedRevision(_ text: String) -> Int? {
+        if let range = text.range(of: #"Committed revision (\d+)"#, options: .regularExpression) {
+            return Int(text[range].filter(\.isNumber))
+        }
+        return nil
     }
 
     // MARK: - 底层执行
@@ -198,15 +415,49 @@ public struct SvnClient: Sendable {
     }
 
     @discardableResult
-    func run(_ arguments: [String], in directory: URL? = nil) async throws -> ProcessResult {
+    func run(
+        _ arguments: [String],
+        in directory: URL? = nil,
+        onStderrChunk: (@Sendable (Data) -> Void)? = nil,
+        timeout: TimeInterval? = nil
+    ) async throws -> ProcessResult {
         let result = try await ProcessRunner.run(
             executable: executable,
             arguments: makeArguments(arguments),
-            currentDirectory: directory
+            currentDirectory: directory,
+            onStderrChunk: onStderrChunk,
+            timeout: timeout
         )
         guard result.exitCode == 0 else {
             throw SvnError.parse(from: result)
         }
         return result
+    }
+}
+
+/// 线程安全的按行缓冲，供 checkout 进度回调解析 stderr。
+private final class LineBuffer: @unchecked Sendable {
+    private let lock = NSLock()
+    private var pending = ""
+
+    func append(_ text: String) -> [String] {
+        lock.lock()
+        defer { lock.unlock() }
+        pending += text
+        var lines: [String] = []
+        while let newline = pending.firstIndex(of: "\n") {
+            let line = String(pending[..<newline]).trimmingCharacters(in: .whitespacesAndNewlines)
+            pending = String(pending[pending.index(after: newline)...])
+            lines.append(line)
+        }
+        return lines
+    }
+
+    func flush() -> String {
+        lock.lock()
+        defer { lock.unlock() }
+        let tail = pending
+        pending = ""
+        return tail
     }
 }

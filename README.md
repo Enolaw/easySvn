@@ -28,7 +28,7 @@ easySvn/
 └── docs/                      # 需求与计划文档
 ```
 
-后续里程碑将在此基础上添加 SwiftUI App target 与 FinderSync 扩展。
+后续将优先推进冲突解决、分支合并、仓库浏览器（M3）；Finder 集成延后至 M4，届时再迁移至 Xcode App target。
 
 ## 环境要求
 
@@ -46,7 +46,7 @@ swift run EasySvnApp
 
 或用 Xcode 打开（`open Package.swift -a Xcode`），选择 `EasySvnApp` scheme 后按 ⌘R。
 
-窗口打开后点击左下角"添加工作副本"，选择任意本地 SVN 工作副本目录，即可看到该目录的修改状态。
+窗口打开后点击左下角「检出…」可从远程仓库检出，或「添加工作副本」选择已有本地目录。连接需认证的服务器时会提示输入凭据（可保存到钥匙串）。变更列表支持 FSEvents 自动刷新（可在设置中关闭）。
 
 ## 构建与测试
 
@@ -65,8 +65,13 @@ swift test
 - [x] M2：最小可运行界面（侧边栏工作副本书签 + 文件状态列表，⌘R 刷新）
 - [x] M2：Update / Commit / Revert、按状态排序、未版本控制/缺失批量操作、全选、URL 中文解码
 - [x] M2：Diff 视图（双击/右键查看本地差异）、日志查看器（分页、搜索、变更文件 diff）
-- [ ] M2：Checkout 向导、认证设置、FSEvents 自动刷新
-- [ ] FinderSync 徽章技术验证（需 Xcode App target，后续迁移时进行）
+- [x] M2：Checkout 向导、认证设置、FSEvents 自动刷新（**M2 / v0.1 alpha 完成**）
+- [x] M3：冲突解决（冲突列表、三方合并、快捷 resolve、树冲突信息）
+- [x] M3：分支与合并（创建分支/标签、Switch、Merge 向导、mergeinfo）
+- [x] M3：仓库浏览器（懒加载目录树、远程 CRUD、文件预览/日志、从此处检出）
+- [ ] M3：体验补全 + v0.5 beta（当前优先）
+- [ ] M3：体验补全 + v0.5 beta
+- [ ] M4：Finder 集成（徽章 + 右键菜单，需 Xcode App target）
 
 ## 引擎层使用示例
 

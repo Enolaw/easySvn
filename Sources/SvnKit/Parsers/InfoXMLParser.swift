@@ -46,6 +46,8 @@ public enum InfoXMLParser {
             }
         }
 
+        let treeConflict = parseTreeConflict(entry)
+
         return SvnInfo(
             kind: kind,
             url: url,
@@ -56,8 +58,20 @@ public enum InfoXMLParser {
             workingCopyRoot: workingCopyRoot,
             lastCommitRevision: lastCommitRevision,
             lastCommitAuthor: lastCommitAuthor,
-            lastCommitDate: lastCommitDate
+            lastCommitDate: lastCommitDate,
+            treeConflict: treeConflict
         )
+    }
+
+    private static func parseTreeConflict(_ entry: XMLElement) -> SvnTreeConflict? {
+        guard let node = entry.elements(forName: "tree-conflict").first else {
+            return nil
+        }
+        let operation = node.attribute(forName: "operation")?.stringValue ?? "unknown"
+        let urls = node.elements(forName: "urls").first
+        let left = urls?.elements(forName: "src-left-side").first?.stringValue
+        let right = urls?.elements(forName: "src-right-side").first?.stringValue
+        return SvnTreeConflict(operation: operation, sourceLeft: left, sourceRight: right)
     }
 
 }

@@ -22,7 +22,7 @@ struct StatusTreeNode: Identifiable, Sendable {
 
     /// 用于排序/着色的代表性状态。
     var representativeStatus: SvnItemStatus? {
-        if let entry { return entry.itemStatus }
+        if let entry { return entry.displayStatus }
         return children.compactMap(\.representativeStatus).min(by: { $0.sortPriority < $1.sortPriority })
     }
 

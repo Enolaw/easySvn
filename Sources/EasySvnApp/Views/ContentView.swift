@@ -3,7 +3,10 @@ import SwiftUI
 
 struct ContentView: View {
     @EnvironmentObject private var store: WorkingCopyStore
+    @EnvironmentObject private var authStore: AuthSettingsStore
     @State private var selection: WorkingCopy.ID?
+    @State private var showCheckoutSheet = false
+    @StateObject private var checkoutViewModel = CheckoutViewModel()
 
     private var selectedWorkingCopy: WorkingCopy? {
         store.workingCopies.first { $0.id == selection }
@@ -53,12 +56,32 @@ struct ContentView: View {
             }
         }
         .safeAreaInset(edge: .bottom) {
-            Button(action: addWorkingCopy) {
-                Label("添加工作副本", systemImage: "plus")
-                    .frame(maxWidth: .infinity)
+            VStack(spacing: 8) {
+                Button(action: { showCheckoutSheet = true }) {
+                    Label("检出…", systemImage: "arrow.down.doc")
+                        .frame(maxWidth: .infinity)
+                }
+                .controlSize(.large)
+
+                Button(action: addWorkingCopy) {
+                    Label("添加工作副本", systemImage: "plus")
+                        .frame(maxWidth: .infinity)
+                }
+                .controlSize(.large)
             }
-            .controlSize(.large)
             .padding(10)
+        }
+        .sheet(isPresented: $showCheckoutSheet) {
+            CheckoutSheet(viewModel: checkoutViewModel) { url in
+                store.add(directoryURL: url)
+                selection = store.workingCopies.first { $0.path == url.path }?.id
+            }
+            .onAppear {
+                checkoutViewModel.configure(authStore: authStore)
+            }
+        }
+        .sheet(item: $authStore.pendingAuthPrompt) { request in
+            AuthPromptSheet(request: request, authStore: authStore)
         }
     }
 

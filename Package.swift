@@ -24,6 +24,11 @@ let package = Package(
             name: "SvnKitTests",
             dependencies: ["SvnKit"],
             path: "Tests/SvnKitTests"
+        ),
+        .testTarget(
+            name: "EasySvnAppTests",
+            dependencies: ["EasySvnApp"],
+            path: "Tests/EasySvnAppTests"
         )
     ]
 )

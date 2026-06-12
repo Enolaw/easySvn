@@ -1,7 +1,7 @@
 import Foundation
 
 /// 日志中单个文件的变更动作。
-public enum SvnChangeAction: String, Sendable, Equatable {
+public enum SvnChangeAction: String, Sendable, Equatable, Codable {
     case added = "A"
     case modified = "M"
     case deleted = "D"
@@ -9,7 +9,7 @@ public enum SvnChangeAction: String, Sendable, Equatable {
 }
 
 /// 日志中的单条变更路径。
-public struct SvnChangedPath: Sendable, Equatable {
+public struct SvnChangedPath: Sendable, Equatable, Codable {
     public let action: SvnChangeAction
     /// 仓库内路径（如 `/trunk/foo.txt`）。
     public let path: String
@@ -35,7 +35,7 @@ public struct SvnChangedPath: Sendable, Equatable {
 }
 
 /// `svn log` 的单条日志。
-public struct SvnLogEntry: Sendable, Equatable {
+public struct SvnLogEntry: Sendable, Equatable, Codable {
     public let revision: Int
     public let author: String?
     public let date: Date?

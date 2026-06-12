@@ -12,6 +12,7 @@ public struct ProcessResult: Sendable {
 
 public enum ProcessRunnerError: Error, Sendable, Equatable {
     case launchFailed(String)
+    case timedOut(seconds: TimeInterval)
 }
 
 /// 线程安全的数据累积缓冲区，供 Pipe 的 readabilityHandler 回调使用。
@@ -45,7 +46,69 @@ public enum ProcessRunner {
         executable: URL,
         arguments: [String],
         currentDirectory: URL? = nil,
-        environment: [String: String]? = nil
+        environment: [String: String]? = nil,
+        onStderrChunk: (@Sendable (Data) -> Void)? = nil,
+        timeout: TimeInterval? = nil
+    ) async throws -> ProcessResult {
+        if let timeout {
+            return try await runWithTimeout(
+                executable: executable,
+                arguments: arguments,
+                currentDirectory: currentDirectory,
+                environment: environment,
+                onStderrChunk: onStderrChunk,
+                timeout: timeout
+            )
+        }
+        return try await runProcess(
+            executable: executable,
+            arguments: arguments,
+            currentDirectory: currentDirectory,
+            environment: environment,
+            onStderrChunk: onStderrChunk
+        )
+    }
+
+    private static func runWithTimeout(
+        executable: URL,
+        arguments: [String],
+        currentDirectory: URL? = nil,
+        environment: [String: String]? = nil,
+        onStderrChunk: (@Sendable (Data) -> Void)? = nil,
+        timeout: TimeInterval
+    ) async throws -> ProcessResult {
+        try await withTaskCancellationHandler {
+            try await withThrowingTaskGroup(of: ProcessResult.self) { group in
+                group.addTask {
+                    try await runProcess(
+                        executable: executable,
+                        arguments: arguments,
+                        currentDirectory: currentDirectory,
+                        environment: environment,
+                        onStderrChunk: onStderrChunk
+                    )
+                }
+                group.addTask {
+                    try await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
+                    throw ProcessRunnerError.timedOut(seconds: timeout)
+                }
+                guard let result = try await group.next() else {
+                    throw ProcessRunnerError.timedOut(seconds: timeout)
+                }
+                group.cancelAll()
+                return result
+            }
+        } onCancel: {
+            // 超时或用户取消时，runProcess 内的 onCancel 会 terminate 子进程。
+        }
+    }
+
+    private static func runProcess(
+        executable: URL,
+        arguments: [String],
+        currentDirectory: URL? = nil,
+        environment: [String: String]? = nil,
+        onStderrChunk: (@Sendable (Data) -> Void)? = nil
     ) async throws -> ProcessResult {
         let process = Process()
         process.executableURL = executable
@@ -71,7 +134,10 @@ public enum ProcessRunner {
         }
         stderrPipe.fileHandleForReading.readabilityHandler = { handle in
             let chunk = handle.availableData
-            if !chunk.isEmpty { stderrBuffer.append(chunk) }
+            if !chunk.isEmpty {
+                stderrBuffer.append(chunk)
+                onStderrChunk?(chunk)
+            }
         }
 
         let box = ProcessBox(process)

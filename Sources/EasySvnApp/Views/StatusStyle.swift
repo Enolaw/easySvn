@@ -1,6 +1,24 @@
 import SwiftUI
 import SvnKit
 
+extension SvnStatusEntry {
+
+    var statusDisplayName: String {
+        if isPropsOnlyModified { return "属性已修改" }
+        return itemStatus.displayName
+    }
+
+    var statusSymbolName: String {
+        if isPropsOnlyModified { return "tag.circle.fill" }
+        return itemStatus.symbolName
+    }
+
+    var statusColor: Color {
+        if isPropsOnlyModified { return .blue }
+        return itemStatus.color
+    }
+}
+
 /// 文件状态在 UI 中的展示样式（颜色/图标/文案遵循 SVN 客户端惯例）。
 extension SvnItemStatus {
 

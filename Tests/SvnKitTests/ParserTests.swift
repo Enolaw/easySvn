@@ -25,6 +25,10 @@ struct StatusXMLParserTests {
     <wc-status item="conflicted" revision="3" props="none" tree-conflicted="true">
     </wc-status>
     </entry>
+    <entry path="tools">
+    <wc-status item="normal" revision="3" props="modified">
+    </wc-status>
+    </entry>
     </target>
     </status>
     """
@@ -32,7 +36,7 @@ struct StatusXMLParserTests {
     @Test("解析多种状态条目")
     func parseEntries() throws {
         let entries = try StatusXMLParser.parse(Data(Self.fixture.utf8))
-        #expect(entries.count == 3)
+        #expect(entries.count == 4)
 
         let modified = try #require(entries.first { $0.path == "modified.txt" })
         #expect(modified.itemStatus == .modified)
@@ -48,6 +52,13 @@ struct StatusXMLParserTests {
         let conflicted = try #require(entries.first { $0.path == "conflict.txt" })
         #expect(conflicted.itemStatus == .conflicted)
         #expect(conflicted.isTreeConflicted)
+
+        let propsOnly = try #require(entries.first { $0.path == "tools" })
+        #expect(propsOnly.itemStatus == .normal)
+        #expect(propsOnly.propsStatus == .modified)
+        #expect(propsOnly.isPropsOnlyModified)
+        #expect(propsOnly.isCommittable)
+        #expect(propsOnly.displayStatus == .modified)
     }
 
     @Test("空 status 输出")

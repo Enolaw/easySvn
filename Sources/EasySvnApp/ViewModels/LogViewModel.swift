@@ -15,8 +15,15 @@ final class LogViewModel: ObservableObject {
     @Published private(set) var isLoadingMore = false
     @Published private(set) var errorMessage: String?
     @Published private(set) var hasMore = true
+    @Published private(set) var isServingFromCache = false
 
     private var oldestLoadedRevision: Int?
+    private var repositoryKey = ""
+    private weak var authStore: AuthSettingsStore?
+
+    func configure(authStore: AuthSettingsStore) {
+        self.authStore = authStore
+    }
 
     var filteredEntries: [SvnLogEntry] {
         let keyword = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -33,31 +40,59 @@ final class LogViewModel: ObservableObject {
         return entries.first { $0.revision == revision }
     }
 
-    func load(workingCopy: WorkingCopy) async {
+    func load(workingCopy: WorkingCopy, forceRefresh: Bool = false) async {
         isLoading = true
         errorMessage = nil
         hasMore = true
+        isServingFromCache = false
         defer { isLoading = false }
 
         do {
-            let client = try SvnClient.detect()
+            let client = try makeClient(for: workingCopy)
+            let info = try? await client.info(at: workingCopy.directoryURL)
+            repositoryKey = LogCacheStore.repositoryKey(for: workingCopy, info: info)
+
+            if forceRefresh {
+                await LogCacheStore.shared.invalidate(repositoryKey: repositoryKey)
+            }
+
+            let cacheKey = LogCacheKey(
+                repositoryKey: repositoryKey,
+                revisionRange: "HEAD:1",
+                limit: Self.pageSize,
+                verbose: true
+            )
+
+            if !forceRefresh, let cached = await LogCacheStore.shared.load(key: cacheKey) {
+                applyLoaded(cached)
+                isServingFromCache = true
+            }
+
             let loaded = try await client.log(
                 at: workingCopy.path,
                 limit: Self.pageSize,
                 revisionRange: "HEAD:1",
                 verbose: true
             )
-            entries = loaded
-            oldestLoadedRevision = loaded.last?.revision
-            selectedRevision = loaded.first?.revision
-            hasMore = (oldestLoadedRevision ?? 1) > 1
+            applyLoaded(loaded)
+            isServingFromCache = false
+            await LogCacheStore.shared.store(key: cacheKey, entries: loaded)
         } catch let error as SvnError {
-            entries = []
-            errorMessage = error.message
+            if entries.isEmpty {
+                if !handleAuthFailure(error, workingCopy: workingCopy, retry: { [weak self] in
+                    await self?.load(workingCopy: workingCopy, forceRefresh: forceRefresh)
+                }) {
+                    errorMessage = error.message
+                }
+            }
         } catch SvnKitError.svnNotFound {
-            errorMessage = "找不到 svn 命令行工具"
+            if entries.isEmpty {
+                errorMessage = "找不到 svn 命令行工具"
+            }
         } catch {
-            errorMessage = error.localizedDescription
+            if entries.isEmpty {
+                errorMessage = error.localizedDescription
+            }
         }
     }
 
@@ -67,19 +102,32 @@ final class LogViewModel: ObservableObject {
         defer { isLoadingMore = false }
 
         do {
-            let client = try SvnClient.detect()
+            let client = try makeClient(for: workingCopy)
             let end = oldest - 1
+            let range = "\(end):1"
+            let cacheKey = LogCacheKey(
+                repositoryKey: repositoryKey,
+                revisionRange: range,
+                limit: Self.pageSize,
+                verbose: true
+            )
+
+            if let cached = await LogCacheStore.shared.load(key: cacheKey) {
+                appendUnique(cached)
+                oldestLoadedRevision = entries.last?.revision
+                hasMore = (oldestLoadedRevision ?? 1) > 1
+            }
+
             let loaded = try await client.log(
                 at: workingCopy.path,
                 limit: Self.pageSize,
-                revisionRange: "\(end):1",
+                revisionRange: range,
                 verbose: true
             )
-            let existing = Set(entries.map(\.revision))
-            let newOnes = loaded.filter { !existing.contains($0.revision) }
-            entries.append(contentsOf: newOnes)
+            appendUnique(loaded)
             oldestLoadedRevision = entries.last?.revision
             hasMore = (oldestLoadedRevision ?? 1) > 1
+            await LogCacheStore.shared.store(key: cacheKey, entries: loaded)
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -88,5 +136,44 @@ final class LogViewModel: ObservableObject {
     func copyRevision(_ revision: Int) {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(String(revision), forType: .string)
+    }
+
+    private func applyLoaded(_ loaded: [SvnLogEntry]) {
+        entries = loaded
+        oldestLoadedRevision = loaded.last?.revision
+        if selectedRevision == nil {
+            selectedRevision = loaded.first?.revision
+        }
+        hasMore = (oldestLoadedRevision ?? 1) > 1
+    }
+
+    private func appendUnique(_ loaded: [SvnLogEntry]) {
+        let existing = Set(entries.map(\.revision))
+        let newOnes = loaded.filter { !existing.contains($0.revision) }
+        entries.append(contentsOf: newOnes)
+    }
+
+    private func makeClient(for workingCopy: WorkingCopy) throws -> SvnClient {
+        if let authStore {
+            return try authStore.makeClient(forRepositoryURL: workingCopy.path)
+        }
+        return try SvnClient.detect()
+    }
+
+    @discardableResult
+    private func handleAuthFailure(
+        _ error: SvnError,
+        workingCopy: WorkingCopy,
+        retry: @escaping () async -> Void
+    ) -> Bool {
+        guard let authStore else { return false }
+        let prompt = authStore.shouldPrompt(for: error, repositoryURL: workingCopy.path)
+        guard prompt.needsPrompt else { return false }
+        authStore.presentAuthPrompt(
+            repositoryURL: workingCopy.path,
+            needsCertTrust: prompt.needsCertTrust,
+            retry: retry
+        )
+        return true
     }
 }

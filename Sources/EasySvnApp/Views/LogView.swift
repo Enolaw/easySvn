@@ -5,13 +5,17 @@ import SvnKit
 struct LogView: View {
     let workingCopy: WorkingCopy
 
+    @EnvironmentObject private var authStore: AuthSettingsStore
+    @EnvironmentObject private var appSettings: AppSettingsStore
     @StateObject private var viewModel = LogViewModel()
     @State private var diffPresentation: DiffPresentation?
+    @State private var externalDiffError: String?
 
     private struct DiffPresentation: Identifiable {
         let id = UUID()
         let revision: Int
         let path: String
+        let action: SvnChangeAction?
     }
 
     var body: some View {
@@ -24,12 +28,21 @@ struct LogView: View {
         .searchable(text: $viewModel.searchText, prompt: "搜索作者、版本号或日志")
         .toolbar { toolbarContent }
         .task(id: workingCopy.id) {
+            viewModel.configure(authStore: authStore)
             await viewModel.load(workingCopy: workingCopy)
+        }
+        .alert("无法打开外部工具", isPresented: Binding(
+            get: { externalDiffError != nil },
+            set: { if !$0 { externalDiffError = nil } }
+        )) {
+            Button("好") { externalDiffError = nil }
+        } message: {
+            Text(externalDiffError ?? "")
         }
         .sheet(item: $diffPresentation) { item in
             DiffView(
                 workingCopy: workingCopy,
-                source: .revision(revision: item.revision, path: item.path),
+                source: .revision(revision: item.revision, path: item.path, action: item.action),
                 title: "r\(item.revision) · \(item.path)"
             )
         }
@@ -39,11 +52,18 @@ struct LogView: View {
     private var toolbarContent: some ToolbarContent {
         ToolbarItem(placement: .primaryAction) {
             Button {
-                Task { await viewModel.load(workingCopy: workingCopy) }
+                Task { await viewModel.load(workingCopy: workingCopy, forceRefresh: true) }
             } label: {
                 Label("刷新", systemImage: "arrow.clockwise")
             }
             .disabled(viewModel.isLoading)
+        }
+        if viewModel.isServingFromCache {
+            ToolbarItem(placement: .automatic) {
+                Text("缓存")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
         }
     }
 
@@ -128,7 +148,7 @@ struct LogView: View {
                             .font(.headline)
                         ForEach(entry.changedPaths, id: \.path) { changed in
                             Button {
-                                diffPresentation = DiffPresentation(revision: entry.revision, path: changed.path)
+                                openDiff(revision: entry.revision, path: changed.path, action: changed.action)
                             } label: {
                                 HStack(spacing: 8) {
                                     Text(changed.action.rawValue)
@@ -145,6 +165,22 @@ struct LogView: View {
                                 }
                             }
                             .buttonStyle(.plain)
+                            .contextMenu {
+                                Button("查看差异") {
+                                    openDiff(revision: entry.revision, path: changed.path, action: changed.action)
+                                }
+                                if appSettings.hasExternalDiffTool {
+                                    Button("使用外部工具查看差异") {
+                                        Task {
+                                            await openExternalDiff(
+                                                revision: entry.revision,
+                                                path: changed.path,
+                                                action: changed.action
+                                            )
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -159,6 +195,27 @@ struct LogView: View {
                     .foregroundStyle(.secondary)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+
+    private func openDiff(revision: Int, path: String, action: SvnChangeAction) {
+        if appSettings.preferExternalDiff && appSettings.hasExternalDiffTool {
+            Task { await openExternalDiff(revision: revision, path: path, action: action) }
+        } else {
+            diffPresentation = DiffPresentation(revision: revision, path: path, action: action)
+        }
+    }
+
+    private func openExternalDiff(revision: Int, path: String, action: SvnChangeAction) async {
+        do {
+            try await ExternalDiffService.open(
+                kind: .revision(revision: revision, path: path, action: action),
+                workingCopy: workingCopy,
+                settings: appSettings,
+                authStore: authStore
+            )
+        } catch {
+            externalDiffError = error.localizedDescription
         }
     }
 

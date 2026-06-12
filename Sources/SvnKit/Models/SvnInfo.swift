@@ -13,6 +13,8 @@ public struct SvnInfo: Sendable, Equatable {
     public let lastCommitRevision: Int?
     public let lastCommitAuthor: String?
     public let lastCommitDate: Date?
+    /// 树冲突详情（仅冲突路径的 info 有值）。
+    public let treeConflict: SvnTreeConflict?
 
     public init(
         kind: String,
@@ -24,7 +26,8 @@ public struct SvnInfo: Sendable, Equatable {
         workingCopyRoot: String? = nil,
         lastCommitRevision: Int? = nil,
         lastCommitAuthor: String? = nil,
-        lastCommitDate: Date? = nil
+        lastCommitDate: Date? = nil,
+        treeConflict: SvnTreeConflict? = nil
     ) {
         self.kind = kind
         self.url = url
@@ -36,5 +39,6 @@ public struct SvnInfo: Sendable, Equatable {
         self.lastCommitRevision = lastCommitRevision
         self.lastCommitAuthor = lastCommitAuthor
         self.lastCommitDate = lastCommitDate
+        self.treeConflict = treeConflict
     }
 }

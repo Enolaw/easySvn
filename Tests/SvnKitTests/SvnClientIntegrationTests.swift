@@ -215,6 +215,54 @@ struct SvnClientIntegrationTests {
         #expect(!FileManager.default.fileExists(atPath: exportDir.appendingPathComponent("del.txt").path))
     }
 
+    @Test("目录 svn:ignore 变更显示为属性已修改且可提交")
+    func propsOnlyDirectoryCommit() async throws {
+        let repo = try await TestRepository.make()
+        defer { repo.cleanup() }
+        let client = repo.client
+
+        try FileManager.default.createDirectory(
+            at: repo.workingCopy.appendingPathComponent("tools"),
+            withIntermediateDirectories: true
+        )
+        try repo.write("tools/readme.txt", contents: "ok\n")
+        try await client.add(paths: ["tools"], in: repo.workingCopy)
+        try await client.commit(message: "add tools", in: repo.workingCopy)
+
+        try await client.appendIgnore(patterns: [".venv"], at: "tools", in: repo.workingCopy)
+        let entries = try await client.status(at: repo.workingCopy)
+        let tools = try #require(entries.first { $0.path == "tools" })
+        #expect(tools.isPropsOnlyModified)
+        #expect(tools.isCommittable)
+
+        let revision = try await client.commit(paths: ["tools"], message: "ignore venv", in: repo.workingCopy)
+        #expect(revision == 2)
+        let after = try await client.status(at: repo.workingCopy)
+        #expect(after.isEmpty)
+    }
+
+    @Test("svn:ignore 显示已忽略项并可取消忽略")
+    func ignoreRoundTrip() async throws {
+        let repo = try await TestRepository.make()
+        defer { repo.cleanup() }
+        let client = repo.client
+
+        try repo.write("skip.txt", contents: "ignored\n")
+        try await client.appendIgnore(patterns: ["skip.txt"], at: ".", in: repo.workingCopy)
+
+        var entries = try await client.status(at: repo.workingCopy, includeIgnored: true)
+        let ignored = try #require(entries.first { $0.path == "skip.txt" })
+        #expect(ignored.itemStatus == .ignored)
+
+        entries = try await client.status(at: repo.workingCopy, includeIgnored: false)
+        #expect(entries.first { $0.path == "skip.txt" } == nil)
+
+        try await client.removeIgnore(patterns: ["skip.txt"], at: ".", in: repo.workingCopy)
+        entries = try await client.status(at: repo.workingCopy, includeIgnored: true)
+        let unversioned = try #require(entries.first { $0.path == "skip.txt" })
+        #expect(unversioned.itemStatus == .unversioned)
+    }
+
     @Test("非工作副本目录报 E155007")
     func notAWorkingCopy() async throws {
         let client = try SvnClient.detect()
