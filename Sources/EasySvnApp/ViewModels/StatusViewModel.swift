@@ -679,12 +679,16 @@ final class StatusViewModel: ObservableObject {
         )
         let skippedNote: String?
         if !evaluation.rejected.isEmpty {
-            let details = evaluation.rejected
-                .map { "\($0.path)：\($0.reason)" }
-                .joined(separator: "\n")
-            skippedNote = "已跳过 \(evaluation.rejected.count) 项：\n\(details)"
+            let details = UnversionedAddPolicy.formatRejectedSummary(
+                title: "已跳过 \(evaluation.rejected.count) 项",
+                rejected: evaluation.rejected
+            )
+            skippedNote = details
             if evaluation.allowed.isEmpty {
-                operationError = "未执行添加\n\(details)"
+                operationError = UnversionedAddPolicy.formatRejectedSummary(
+                    title: "未执行添加",
+                    rejected: evaluation.rejected
+                )
                 return (nil, skippedNote)
             }
         } else {

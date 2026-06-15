@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import SvnKit
 
@@ -50,8 +51,39 @@ final class RepoBrowserViewModel: ObservableObject {
         return trimmed.isEmpty ? nil : trimmed
     }
 
+    private var rootURLPrefix: String {
+        rootURL.hasSuffix("/") ? String(rootURL.dropLast()) : rootURL
+    }
+
+    private var navigationAnchorForUp: String {
+        if !selectedIsDirectory, let selectedURL { return selectedURL }
+        return currentURL
+    }
+
+    var goUpTarget: String? {
+        RepositoryURLHelper.parentURL(of: navigationAnchorForUp)
+    }
+
+    var canGoUp: Bool {
+        guard let parent = goUpTarget else { return false }
+        let root = rootURLPrefix
+        return parent == root || (parent.count >= root.count && parent.hasPrefix(root))
+    }
+
     func configure(authStore: AuthSettingsStore) {
         self.authStore = authStore
+    }
+
+    func copyRemoteURL(_ url: String) {
+        let text: String
+        if let rev = revisionArgument {
+            text = "\(url)@\(rev)"
+        } else {
+            text = url
+        }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+        operationMessage = "已复制远程链接"
     }
 
     func load(workingCopy: WorkingCopy) async {
@@ -112,6 +144,18 @@ final class RepoBrowserViewModel: ObservableObject {
     func selectDeferred(_ url: String) {
         DispatchQueue.main.async {
             Task { await self.select(url) }
+        }
+    }
+
+    func goUp() async {
+        guard let parent = goUpTarget, canGoUp else { return }
+        expandedURLs.insert(parent)
+        await select(parent)
+    }
+
+    func goUpDeferred() {
+        DispatchQueue.main.async {
+            Task { await self.goUp() }
         }
     }
 

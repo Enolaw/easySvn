@@ -5,7 +5,7 @@ enum UnversionedAddPolicy {
 
     private static let blockedNames: Set<String> = [
         ".venv", "venv", "node_modules", "__pycache__", ".git",
-        "DerivedData", "build", "dist", ".tox", ".pytest_cache"
+        "DerivedData", "build", ".tox", ".pytest_cache"
     ]
 
     private static let maxRecursiveFileCount = 200
@@ -29,6 +29,34 @@ enum UnversionedAddPolicy {
         return Evaluation(allowed: allowed, rejected: rejected)
     }
 
+    /// 将大量跳过项汇总为简短说明，避免弹窗渲染过多行导致卡死。
+    static func formatRejectedSummary(
+        title: String?,
+        rejected: [(path: String, reason: String)],
+        maxExamplesPerReason: Int = 3
+    ) -> String {
+        guard !rejected.isEmpty else { return title ?? "" }
+        var lines: [String] = []
+        if let title, !title.isEmpty {
+            lines.append(title)
+            lines.append("")
+        }
+        lines.append("共 \(rejected.count) 项被跳过：")
+
+        let grouped = Dictionary(grouping: rejected, by: \.reason)
+        for (reason, items) in grouped.sorted(by: { $0.value.count > $1.value.count }) {
+            lines.append("• \(items.count) 项：\(reason)")
+            for path in items.prefix(maxExamplesPerReason) {
+                lines.append("  \(path)")
+            }
+            let remaining = items.count - maxExamplesPerReason
+            if remaining > 0 {
+                lines.append("  … 另有 \(remaining) 项")
+            }
+        }
+        return lines.joined(separator: "\n")
+    }
+
     private static func rejectionReason(for path: String, workingCopyRoot: URL) -> String? {
         let components = path.split(separator: "/").map(String.init)
         for name in components {
@@ -41,6 +69,11 @@ enum UnversionedAddPolicy {
         var isDirectory: ObjCBool = false
         guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory),
               isDirectory.boolValue else {
+            return nil
+        }
+
+        // Tag 归档场景需提交 dist 构建产物，不对 dist 目录做文件数上限。
+        if components.contains("dist") {
             return nil
         }
 

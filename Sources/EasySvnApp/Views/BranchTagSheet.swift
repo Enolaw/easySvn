@@ -20,26 +20,45 @@ struct BranchTagSheet: View {
                 }
             }
             .pickerStyle(.segmented)
+            .onChange(of: viewModel.kind) { _ in
+                viewModel.onKindChanged()
+            }
 
             labeledField("来源 URL", text: $viewModel.sourceURL)
+                .onChange(of: viewModel.sourceURL) { _ in
+                    viewModel.onSourceURLChanged()
+                }
 
             VStack(alignment: .leading, spacing: 6) {
                 Text("\(viewModel.kind.displayName)名称")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                TextField("feature-x", text: $viewModel.name)
+                TextField("3.11.0", text: $viewModel.name)
                     .textFieldStyle(.roundedBorder)
                     .onChange(of: viewModel.name) { _ in
-                        viewModel.applySuggestedName()
+                        viewModel.normalizeName()
                     }
+                Text("仅填写版本号或分支名，不要粘贴完整 URL")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
             }
 
-            if !viewModel.destinationURL.isEmpty {
-                Text("目标：\(viewModel.destinationURL.displayDecodedURL)")
+            VStack(alignment: .leading, spacing: 6) {
+                Text("目标 URL")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                    .lineLimit(2)
-                    .truncationMode(.middle)
+                TextField("目标路径", text: $viewModel.destinationURL)
+                    .textFieldStyle(.roundedBorder)
+                    .onChange(of: viewModel.destinationURL) { _ in
+                        viewModel.onDestinationEdited()
+                    }
+                if !viewModel.destinationURL.isEmpty {
+                    Text(viewModel.destinationURL.displayDecodedURL)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                        .truncationMode(.middle)
+                }
             }
 
             labeledField("提交日志", text: $viewModel.message)

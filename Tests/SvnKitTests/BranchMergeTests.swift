@@ -24,6 +24,57 @@ struct RepositoryURLBuilderTests {
         )
         #expect(url == "file:///tmp/repo/tags/v1.0")
     }
+
+    @Test("误粘贴 URL 时提取最后一段作为名称")
+    func sanitizePastedURL() {
+        let name = RepositoryURLBuilder.sanitizeCopyName(
+            "http://192.168.1.1/svn/repo/project/03_SourceCodes/app/3.11.0"
+        )
+        #expect(name == "3.11.0")
+    }
+
+    @Test("03_SourceCodes 布局推断标签目标")
+    func inferredTagFromSourceCodesLayout() {
+        let source = "http://192.168.143.223/svn/05_application_sw/Proj/03_SourceCodes/nfcos-vip-event-h5-ui/trunk"
+        let url = RepositoryURLBuilder.inferredDestinationURL(
+            sourceURL: source,
+            repositoryRoot: "http://192.168.143.223/svn/05_application_sw",
+            kind: .tag,
+            name: "3.11.0"
+        )
+        #expect(url == "http://192.168.143.223/svn/05_application_sw/Proj/03_SourceCodes/03_Tag/nfcos-vip-event-h5-ui/3.11.0")
+    }
+
+    @Test("05_SourceCodes 布局推断标签目标")
+    func inferredTagFrom05SourceCodesLayout() {
+        let source = "http://192.168.143.223/svn/05_application_sw/NB2018/05_SourceCodes/nfcos-vip-event-h5-ui/trunk"
+        let url = RepositoryURLBuilder.inferredDestinationURL(
+            sourceURL: source,
+            repositoryRoot: "http://192.168.143.223/svn/05_application_sw",
+            kind: .tag,
+            name: "3.11.0"
+        )
+        #expect(url == "http://192.168.143.223/svn/05_application_sw/NB2018/05_SourceCodes/03_Tag/nfcos-vip-event-h5-ui/3.11.0")
+    }
+
+    @Test("来源路径含 03_Tag 时仍推断到正确标签目录")
+    func inferredTagWhenSourceContainsTagFolder() {
+        let source = "http://host/svn/repo/Proj/05_SourceCodes/03_Tag/nfcos-vip-event-h5-ui/4.9.0"
+        let url = RepositoryURLBuilder.inferredDestinationURL(
+            sourceURL: source,
+            repositoryRoot: "http://host/svn/repo",
+            kind: .tag,
+            name: "4.10.0"
+        )
+        #expect(url == "http://host/svn/repo/Proj/05_SourceCodes/03_Tag/nfcos-vip-event-h5-ui/4.10.0")
+    }
+
+    @Test("目标仅为 Tag 目录时自动追加版本号")
+    func resolvedCopyDestinationAppendsName() {
+        let base = "http://host/svn/repo/05_SourceCodes/03_Tag/nfcos-vip-event-h5-ui"
+        let url = RepositoryURLBuilder.resolvedCopyDestination(baseURL: base, name: "3.11.0")
+        #expect(url == "http://host/svn/repo/05_SourceCodes/03_Tag/nfcos-vip-event-h5-ui/3.11.0")
+    }
 }
 
 @Suite("MergeinfoParser")

@@ -8,24 +8,25 @@ final class BranchTagViewModel: ObservableObject {
     @Published var kind: RepositoryCopyKind = .branch
     @Published var sourceURL = ""
     @Published var name = ""
+    @Published var destinationURL = ""
     @Published var message = ""
     @Published private(set) var isWorking = false
     @Published var errorMessage: String?
 
     private weak var authStore: AuthSettingsStore?
     private var repositoryRoot = ""
-
-    var destinationURL: String {
-        guard !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return "" }
-        return RepositoryURLBuilder.destinationURL(
-            repositoryRoot: repositoryRoot,
-            kind: kind,
-            name: name.trimmingCharacters(in: .whitespacesAndNewlines)
-        )
-    }
+    private var destinationEditedByUser = false
 
     var canSubmit: Bool {
-        !sourceURL.isEmpty && !name.isEmpty && !message.isEmpty && !isWorking
+        !sourceURL.isEmpty
+            && !sanitizedName.isEmpty
+            && !destinationURL.isEmpty
+            && !message.isEmpty
+            && !isWorking
+    }
+
+    private var sanitizedName: String {
+        RepositoryURLBuilder.sanitizeCopyName(name)
     }
 
     func configure(authStore: AuthSettingsStore) {
@@ -34,11 +35,15 @@ final class BranchTagViewModel: ObservableObject {
 
     func load(workingCopy: WorkingCopy) async {
         errorMessage = nil
+        destinationEditedByUser = false
         do {
             let client = try makeClient(for: workingCopy)
             let info = try await client.info(at: workingCopy.directoryURL)
             sourceURL = info.url
             repositoryRoot = info.repositoryRoot
+            name = RepositoryURLHelper.lastComponent(of: info.url)
+            applySuggestedDestination()
+            applySuggestedName()
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -50,7 +55,10 @@ final class BranchTagViewModel: ObservableObject {
         errorMessage = nil
         defer { isWorking = false }
 
-        let dest = destinationURL
+        let dest = RepositoryURLBuilder.resolvedCopyDestination(
+            baseURL: destinationURL,
+            name: sanitizedName
+        )
         let log = message.trimmingCharacters(in: .whitespacesAndNewlines)
 
         do {
@@ -76,11 +84,46 @@ final class BranchTagViewModel: ObservableObject {
         }
     }
 
-    func applySuggestedName() {
-        guard !name.isEmpty else { return }
-        if message.isEmpty {
-            message = "创建\(kind.displayName) \(name)"
+    func onKindChanged() {
+        destinationEditedByUser = false
+        applySuggestedDestination()
+        applySuggestedName()
+    }
+
+    func normalizeName() {
+        let sanitized = sanitizedName
+        if sanitized != name {
+            name = sanitized
         }
+        applySuggestedDestination()
+        applySuggestedName()
+    }
+
+    func onSourceURLChanged() {
+        destinationEditedByUser = false
+        applySuggestedDestination()
+    }
+
+    func onDestinationEdited() {
+        destinationEditedByUser = true
+    }
+
+    func applySuggestedName() {
+        let label = sanitizedName.isEmpty ? name : sanitizedName
+        guard !label.isEmpty else { return }
+        if message.isEmpty || message.hasPrefix("创建") {
+            message = "创建\(kind.displayName) \(label)"
+        }
+    }
+
+    private func applySuggestedDestination() {
+        guard !destinationEditedByUser else { return }
+        destinationURL = RepositoryURLBuilder.inferredDestinationURL(
+            sourceURL: sourceURL,
+            repositoryRoot: repositoryRoot,
+            kind: kind,
+            name: name
+        )
     }
 
     private func makeClient(for workingCopy: WorkingCopy) throws -> SvnClient {

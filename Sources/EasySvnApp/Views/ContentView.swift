@@ -13,49 +13,80 @@ struct ContentView: View {
     }
 
     var body: some View {
-        NavigationSplitView {
+        HSplitView {
             sidebar
-                .navigationSplitViewColumnWidth(min: 180, ideal: 220)
-        } detail: {
-            if let workingCopy = selectedWorkingCopy {
-                WorkingCopyDetailView(workingCopy: workingCopy)
-            } else {
-                emptyPlaceholder
+                .frame(minWidth: 180, idealWidth: 220, maxWidth: 360)
+
+            Group {
+                if let workingCopy = selectedWorkingCopy {
+                    WorkingCopyDetailView(workingCopy: workingCopy)
+                } else {
+                    emptyPlaceholder
+                }
             }
+            .frame(minWidth: 480, maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .sheet(isPresented: $showCheckoutSheet) {
+            CheckoutSheet(viewModel: checkoutViewModel) { url in
+                store.add(directoryURL: url)
+                selection = store.workingCopies.first { $0.path == url.path }?.id
+            }
+            .onAppear {
+                checkoutViewModel.configure(authStore: authStore)
+            }
+        }
+        .sheet(item: $authStore.pendingAuthPrompt) { request in
+            AuthPromptSheet(request: request, authStore: authStore)
+        }
+        .onAppear {
+            if selection == nil {
+                selection = store.workingCopies.first?.id
+            }
+        }
+        .onChange(of: store.workingCopies) { copies in
+            if let selection, copies.contains(where: { $0.id == selection }) {
+                return
+            }
+            selection = copies.first?.id
         }
     }
 
     private var sidebar: some View {
-        List(selection: $selection) {
-            Section("工作副本") {
-                ForEach(store.workingCopies) { workingCopy in
-                    Label {
-                        VStack(alignment: .leading, spacing: 1) {
-                            Text(workingCopy.name)
-                            Text(workingCopy.path)
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
-                                .truncationMode(.middle)
+        VStack(spacing: 0) {
+            List(selection: $selection) {
+                Section("工作副本") {
+                    ForEach(store.workingCopies) { workingCopy in
+                        Label {
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text(workingCopy.name)
+                                Text(workingCopy.path)
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                                    .truncationMode(.middle)
+                            }
+                        } icon: {
+                            Image(systemName: "externaldrive.connected.to.line.below")
                         }
-                    } icon: {
-                        Image(systemName: "externaldrive.connected.to.line.below")
-                    }
-                    .tag(workingCopy.id)
-                    .contextMenu {
-                        Button("在 Finder 中显示") {
-                            NSWorkspace.shared.activateFileViewerSelecting([workingCopy.directoryURL])
-                        }
-                        Divider()
-                        Button("移除", role: .destructive) {
-                            if selection == workingCopy.id { selection = nil }
-                            store.remove(workingCopy)
+                        .tag(workingCopy.id)
+                        .contextMenu {
+                            Button("在 Finder 中显示") {
+                                NSWorkspace.shared.activateFileViewerSelecting([workingCopy.directoryURL])
+                            }
+                            Divider()
+                            Button("移除", role: .destructive) {
+                                if selection == workingCopy.id { selection = nil }
+                                store.remove(workingCopy)
+                            }
                         }
                     }
                 }
             }
-        }
-        .safeAreaInset(edge: .bottom) {
+            .listStyle(.plain)
+            .scrollContentBackground(.hidden)
+
+            Divider()
+
             VStack(spacing: 8) {
                 Button(action: { showCheckoutSheet = true }) {
                     Label("检出…", systemImage: "arrow.down.doc")
@@ -71,18 +102,7 @@ struct ContentView: View {
             }
             .padding(10)
         }
-        .sheet(isPresented: $showCheckoutSheet) {
-            CheckoutSheet(viewModel: checkoutViewModel) { url in
-                store.add(directoryURL: url)
-                selection = store.workingCopies.first { $0.path == url.path }?.id
-            }
-            .onAppear {
-                checkoutViewModel.configure(authStore: authStore)
-            }
-        }
-        .sheet(item: $authStore.pendingAuthPrompt) { request in
-            AuthPromptSheet(request: request, authStore: authStore)
-        }
+        .background(AppSurfaceColors.sidebar)
     }
 
     private var emptyPlaceholder: some View {

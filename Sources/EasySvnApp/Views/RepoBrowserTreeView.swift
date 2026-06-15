@@ -23,7 +23,9 @@ struct RepoBrowserTreeView: View {
                 )
             }
         }
-        .listStyle(.sidebar)
+        .listStyle(.plain)
+        .scrollContentBackground(.hidden)
+        .background(AppSurfaceColors.sidebar)
     }
 }
 
@@ -82,6 +84,10 @@ private struct RepoTreeBranch: View {
         }
         .tag(item.url)
         .contextMenu {
+            Button("复制远程链接") {
+                viewModel.copyRemoteURL(item.url)
+            }
+            Divider()
             Button("查看日志…") {
                 onViewLog?(item)
             }

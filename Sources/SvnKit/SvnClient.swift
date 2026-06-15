@@ -325,7 +325,7 @@ public struct SvnClient: Sendable {
         return parseCommittedRevision(result.stdoutText)
     }
 
-    /// 创建分支/标签：确保 `branches/` 或 `tags/` 存在后执行 copy。
+    /// 创建分支/标签：先 copy，仅在父目录不存在时再 mkdir。
     @discardableResult
     public func copyBranchOrTag(
         from source: String,
@@ -334,16 +334,47 @@ public struct SvnClient: Sendable {
         repositoryRoot: String,
         message: String
     ) async throws -> Int? {
-        let folderURL = RepositoryURLBuilder.kindFolderURL(repositoryRoot: repositoryRoot, kind: kind)
         do {
-            try await mkdir(folderURL, message: "ensure \(kind.folderName) folder")
+            return try await copy(from: source, to: destination, message: message)
         } catch let error as SvnError {
-            // 目录已存在时忽略
-            if error.code != 150002 && !error.message.localizedCaseInsensitiveContains("already exists") {
+            guard let parent = RepositoryURLHelper.parentURL(of: destination),
+                  isMissingParentDirectoryError(error) else {
                 throw error
             }
+            try await ensureRemoteDirectory(parent, kind: kind)
+            return try await copy(from: source, to: destination, message: message)
         }
-        return try await copy(from: source, to: destination, message: message)
+    }
+
+    private func isMissingParentDirectoryError(_ error: SvnError) -> Bool {
+        let lower = error.message.lowercased()
+        return lower.contains("not found")
+            || lower.contains("does not exist")
+            || lower.contains("unable to find")
+            || lower.contains("path not found")
+    }
+
+    private func remotePathExists(_ url: String) async -> Bool {
+        guard let target = URL(string: url) else { return false }
+        do {
+            _ = try await info(at: target)
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    private func ensureRemoteDirectory(_ url: String, kind: RepositoryCopyKind) async throws {
+        if await remotePathExists(url) { return }
+        do {
+            try await mkdir(url, message: "ensure \(kind.displayName) parent folder", parents: true)
+        } catch let error as SvnError {
+            if error.code == 150002 || error.message.localizedCaseInsensitiveContains("already exists") {
+                return
+            }
+            if await remotePathExists(url) { return }
+            throw error
+        }
     }
 
     /// 切换工作副本到另一分支 URL。

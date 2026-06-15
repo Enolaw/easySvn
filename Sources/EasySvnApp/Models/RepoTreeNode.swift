@@ -8,6 +8,7 @@ struct RepoTreeNode: Identifiable, Hashable, Sendable {
     let url: String
     let kind: SvnListEntry.Kind
     let commitRevision: Int?
+    let commitDate: Date?
 
     init(entry: SvnListEntry, parentURL: String) {
         self.name = entry.name
@@ -15,6 +16,7 @@ struct RepoTreeNode: Identifiable, Hashable, Sendable {
         self.id = url
         self.kind = entry.kind
         self.commitRevision = entry.commitRevision
+        self.commitDate = entry.commitDate
     }
 
     init(rootURL: String, name: String = "/") {
@@ -23,5 +25,6 @@ struct RepoTreeNode: Identifiable, Hashable, Sendable {
         self.id = rootURL
         self.kind = .dir
         self.commitRevision = nil
+        self.commitDate = nil
     }
 }

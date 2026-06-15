@@ -87,17 +87,6 @@ struct StatusListView: View {
         } message: {
             Text("本地修改将丢失，且无法撤销。")
         }
-        .alert(
-            "操作失败",
-            isPresented: Binding(
-                get: { viewModel.operationError != nil },
-                set: { if !$0 { viewModel.operationError = nil } }
-            )
-        ) {
-            Button("好") { viewModel.operationError = nil }
-        } message: {
-            Text(viewModel.operationError ?? "")
-        }
         .alert("无法打开外部工具", isPresented: Binding(
             get: { externalDiffError != nil },
             set: { if !$0 { externalDiffError = nil } }
@@ -105,6 +94,17 @@ struct StatusListView: View {
             Button("好") { externalDiffError = nil }
         } message: {
             Text(externalDiffError ?? "")
+        }
+        .sheet(isPresented: Binding(
+            get: { viewModel.operationError != nil },
+            set: { if !$0 { viewModel.operationError = nil } }
+        )) {
+            OperationNoticeSheet(
+                title: "操作失败",
+                message: viewModel.operationError ?? ""
+            ) {
+                viewModel.operationError = nil
+            }
         }
         .sheet(isPresented: Binding(
             get: { diffPath != nil },
@@ -885,5 +885,43 @@ struct StatusTreeRow: View {
                 .background(style.color.opacity(0.12), in: Capsule())
         }
         .padding(.vertical, 1)
+    }
+}
+
+/// 可滚动的操作提示面板，避免长文本 alert 卡死界面。
+private struct OperationNoticeSheet: View {
+    let title: String
+    let message: String
+    let onDismiss: () -> Void
+
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Text(title)
+                .font(.headline)
+                .padding(.top, 16)
+                .padding(.horizontal, 20)
+
+            ScrollView {
+                Text(message)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .textSelection(.enabled)
+                    .padding(20)
+            }
+
+            Divider()
+
+            HStack {
+                Spacer()
+                Button("好") {
+                    onDismiss()
+                    dismiss()
+                }
+                .keyboardShortcut(.defaultAction)
+            }
+            .padding(16)
+        }
+        .frame(width: 520, height: 320)
     }
 }

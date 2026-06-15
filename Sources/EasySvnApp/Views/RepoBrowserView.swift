@@ -49,9 +49,11 @@ struct RepoBrowserView: View {
             HSplitView {
                 RepoBrowserTreeView(viewModel: viewModel, onViewLog: showLog)
                     .frame(minWidth: 200, idealWidth: 240)
+                    .background(AppSurfaceColors.sidebar)
 
                 detailPanel
                     .frame(minWidth: 360)
+                    .background(AppSurfaceColors.repoDirectory)
             }
         }
         .toolbar { toolbarContent }
@@ -127,6 +129,15 @@ struct RepoBrowserView: View {
         }
         ToolbarItem(placement: .automatic) {
             Button {
+                viewModel.goUpDeferred()
+            } label: {
+                Label("上一级", systemImage: "chevron.left")
+            }
+            .disabled(!viewModel.canGoUp)
+            .help("返回上一级文件夹")
+        }
+        ToolbarItem(placement: .automatic) {
+            Button {
                 Task { await viewModel.refresh() }
             } label: {
                 Label("刷新", systemImage: "arrow.clockwise")
@@ -172,6 +183,15 @@ struct RepoBrowserView: View {
 
     private var detailHeader: some View {
         HStack(spacing: 8) {
+            Button {
+                viewModel.goUpDeferred()
+            } label: {
+                Image(systemName: "chevron.left")
+            }
+            .buttonStyle(.borderless)
+            .disabled(!viewModel.canGoUp)
+            .help("返回上一级文件夹")
+
             if let name = viewModel.selectedFileName {
                 Image(systemName: "doc.text")
                     .foregroundStyle(.blue)
@@ -195,7 +215,7 @@ struct RepoBrowserView: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
-        .background(.bar)
+        .background(AppSurfaceColors.chromeBar)
     }
 
     private var directoryList: some View {
@@ -225,9 +245,14 @@ struct RepoBrowserView: View {
                                 .font(.caption2)
                                 .foregroundStyle(.tertiary)
                         }
+                        if let date = item.commitDate {
+                            Text(date.formatted(date: .numeric, time: .shortened))
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
                         if let rev = item.commitRevision {
                             Text("r\(rev)")
-                                .font(.caption)
+                                .font(.caption.monospacedDigit())
                                 .foregroundStyle(.secondary)
                         }
                     }
@@ -241,9 +266,11 @@ struct RepoBrowserView: View {
                         }
                     }
                 }
-                .listStyle(.inset)
+                .listStyle(.plain)
+                .scrollContentBackground(.hidden)
             }
         }
+        .background(AppSurfaceColors.repoDirectory)
     }
 
     private var filePreview: some View {
@@ -273,10 +300,12 @@ struct RepoBrowserView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
             .frame(minHeight: 200)
+            .background(AppSurfaceColors.repoDirectory)
 
             logSection
                 .frame(minHeight: 140)
         }
+        .background(AppSurfaceColors.repoDirectory)
         .contextMenu {
             if let url = viewModel.selectedURL {
                 itemMenu(for: RepoTreeNode(
@@ -315,12 +344,18 @@ struct RepoBrowserView: View {
                     }
                 }
                 .listStyle(.plain)
+                .scrollContentBackground(.hidden)
             }
         }
+        .background(AppSurfaceColors.repoDirectory)
     }
 
     @ViewBuilder
     private func itemMenu(for item: RepoTreeNode) -> some View {
+        Button("复制远程链接") {
+            viewModel.copyRemoteURL(item.url)
+        }
+        Divider()
         if item.kind == .dir {
             Button("打开") {
                 viewModel.selectDeferred(item.url)
