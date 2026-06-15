@@ -93,7 +93,7 @@ final class StatusViewModel: ObservableObject {
     }
 
     init() {
-        recentCommitMessages = UserDefaults.standard.stringArray(forKey: Self.recentMessagesKey) ?? []
+        recentCommitMessages = AppUserDefaults.shared.stringArray(forKey: Self.recentMessagesKey) ?? []
     }
 
     func configure(authStore: AuthSettingsStore, appSettings: AppSettingsStore) {
@@ -776,7 +776,7 @@ final class StatusViewModel: ObservableObject {
         var messages = recentCommitMessages.filter { $0 != message }
         messages.insert(message, at: 0)
         recentCommitMessages = Array(messages.prefix(Self.maxRecentMessages))
-        UserDefaults.standard.set(recentCommitMessages, forKey: Self.recentMessagesKey)
+        AppUserDefaults.shared.set(recentCommitMessages, forKey: Self.recentMessagesKey)
     }
 
     // MARK: - 错误文案

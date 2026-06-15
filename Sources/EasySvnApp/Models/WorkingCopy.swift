@@ -11,10 +11,11 @@ struct WorkingCopy: Identifiable, Codable, Hashable {
     init(id: UUID = UUID(), name: String, path: String) {
         self.id = id
         self.name = name
-        self.path = path
+        self.path = WorkingCopyPathNormalizer.normalize(path)
     }
 
     init(directoryURL: URL) {
-        self.init(name: directoryURL.lastPathComponent, path: directoryURL.path)
+        let normalized = WorkingCopyPathNormalizer.normalize(directoryURL.path)
+        self.init(name: directoryURL.lastPathComponent, path: normalized)
     }
 }

@@ -27,17 +27,24 @@ final class WorkingCopyStore: ObservableObject {
 
     private func load() {
         guard
-            let data = UserDefaults.standard.data(forKey: Self.defaultsKey),
+            let data = AppUserDefaults.shared.data(forKey: Self.defaultsKey),
             let decoded = try? JSONDecoder().decode([WorkingCopy].self, from: data)
         else {
             return
         }
-        workingCopies = decoded
+        workingCopies = decoded.map { item in
+            var copy = item
+            copy.path = WorkingCopyPathNormalizer.normalize(item.path)
+            return copy
+        }
+        if workingCopies != decoded {
+            save()
+        }
     }
 
     private func save() {
         if let data = try? JSONEncoder().encode(workingCopies) {
-            UserDefaults.standard.set(data, forKey: Self.defaultsKey)
+            AppUserDefaults.shared.set(data, forKey: Self.defaultsKey)
         }
     }
 }

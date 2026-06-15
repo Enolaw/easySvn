@@ -114,17 +114,17 @@ final class AppSettingsStore: ObservableObject {
         }
     }
     @Published var externalDiffExecutable: String {
-        didSet { UserDefaults.standard.set(externalDiffExecutable, forKey: Self.diffExecutableKey) }
+        didSet { AppUserDefaults.shared.set(externalDiffExecutable, forKey: Self.diffExecutableKey) }
     }
     @Published var externalDiffArguments: String {
-        didSet { UserDefaults.standard.set(externalDiffArguments, forKey: Self.diffArgumentsKey) }
+        didSet { AppUserDefaults.shared.set(externalDiffArguments, forKey: Self.diffArgumentsKey) }
     }
     @Published var preferExternalDiff: Bool {
-        didSet { UserDefaults.standard.set(preferExternalDiff, forKey: Self.preferExternalDiffKey) }
+        didSet { AppUserDefaults.shared.set(preferExternalDiff, forKey: Self.preferExternalDiffKey) }
     }
     /// 变更列表是否显示 svn:ignore 匹配项。
     @Published var showIgnored: Bool {
-        didSet { UserDefaults.standard.set(showIgnored, forKey: Self.showIgnoredKey) }
+        didSet { AppUserDefaults.shared.set(showIgnored, forKey: Self.showIgnoredKey) }
     }
 
     var hasExternalDiffTool: Bool {
@@ -135,18 +135,18 @@ final class AppSettingsStore: ObservableObject {
         theme = Self.load(AppTheme.self, key: Self.themeKey, default: .system)
         language = Self.load(AppLanguage.self, key: Self.languageKey, default: .system)
         externalDiffPreset = Self.load(ExternalDiffPreset.self, key: Self.diffPresetKey, default: .none)
-        externalDiffExecutable = UserDefaults.standard.string(forKey: Self.diffExecutableKey) ?? ""
-        externalDiffArguments = UserDefaults.standard.string(forKey: Self.diffArgumentsKey)
+        externalDiffExecutable = AppUserDefaults.shared.string(forKey: Self.diffExecutableKey) ?? ""
+        externalDiffArguments = AppUserDefaults.shared.string(forKey: Self.diffArgumentsKey)
             ?? ExternalDiffPreset.none.defaultArguments
-        if UserDefaults.standard.object(forKey: Self.preferExternalDiffKey) == nil {
+        if AppUserDefaults.shared.object(forKey: Self.preferExternalDiffKey) == nil {
             preferExternalDiff = false
         } else {
-            preferExternalDiff = UserDefaults.standard.bool(forKey: Self.preferExternalDiffKey)
+            preferExternalDiff = AppUserDefaults.shared.bool(forKey: Self.preferExternalDiffKey)
         }
-        if UserDefaults.standard.object(forKey: Self.showIgnoredKey) == nil {
+        if AppUserDefaults.shared.object(forKey: Self.showIgnoredKey) == nil {
             showIgnored = false
         } else {
-            showIgnored = UserDefaults.standard.bool(forKey: Self.showIgnoredKey)
+            showIgnored = AppUserDefaults.shared.bool(forKey: Self.showIgnoredKey)
         }
         applyDiffPresetDefaultsIfNeeded()
     }
@@ -170,7 +170,7 @@ final class AppSettingsStore: ObservableObject {
     }
 
     private func persist<T: RawRepresentable>(_ value: T, key: String) where T.RawValue == String {
-        UserDefaults.standard.set(value.rawValue, forKey: key)
+        AppUserDefaults.shared.set(value.rawValue, forKey: key)
     }
 
     private static func load<T: RawRepresentable>(
@@ -178,7 +178,7 @@ final class AppSettingsStore: ObservableObject {
         key: String,
         default defaultValue: T
     ) -> T where T.RawValue == String {
-        guard let raw = UserDefaults.standard.string(forKey: key),
+        guard let raw = AppUserDefaults.shared.string(forKey: key),
               let value = T(rawValue: raw) else {
             return defaultValue
         }

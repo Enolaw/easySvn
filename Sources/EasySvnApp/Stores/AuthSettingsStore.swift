@@ -22,7 +22,7 @@ final class AuthSettingsStore: ObservableObject {
     @Published private(set) var knownRealms: [String] = []
     @Published private(set) var trustedCertRealms: Set<String> = []
     @Published var autoRefreshEnabled: Bool {
-        didSet { UserDefaults.standard.set(autoRefreshEnabled, forKey: Self.autoRefreshKey) }
+        didSet { AppUserDefaults.shared.set(autoRefreshEnabled, forKey: Self.autoRefreshKey) }
     }
     @Published var pendingAuthPrompt: AuthPromptRequest?
 
@@ -31,16 +31,16 @@ final class AuthSettingsStore: ObservableObject {
 
     init(credentialStore: any CredentialStore = KeychainCredentialStore()) {
         self.credentialStore = credentialStore
-        knownRealms = UserDefaults.standard.stringArray(forKey: Self.knownRealmsKey) ?? []
-        if let trusted = UserDefaults.standard.stringArray(forKey: Self.trustedCertRealmsKey) {
+        knownRealms = AppUserDefaults.shared.stringArray(forKey: Self.knownRealmsKey) ?? []
+        if let trusted = AppUserDefaults.shared.stringArray(forKey: Self.trustedCertRealmsKey) {
             trustedCertRealms = Set(trusted)
         } else {
             trustedCertRealms = []
         }
-        if UserDefaults.standard.object(forKey: Self.autoRefreshKey) == nil {
+        if AppUserDefaults.shared.object(forKey: Self.autoRefreshKey) == nil {
             autoRefreshEnabled = true
         } else {
-            autoRefreshEnabled = UserDefaults.standard.bool(forKey: Self.autoRefreshKey)
+            autoRefreshEnabled = AppUserDefaults.shared.bool(forKey: Self.autoRefreshKey)
         }
     }
 
@@ -87,7 +87,7 @@ final class AuthSettingsStore: ObservableObject {
     func deleteCredentials(for realm: String) throws {
         try credentialStore.delete(for: realm)
         knownRealms.removeAll { $0 == realm }
-        UserDefaults.standard.set(knownRealms, forKey: Self.knownRealmsKey)
+        AppUserDefaults.shared.set(knownRealms, forKey: Self.knownRealmsKey)
     }
 
     func setTrustServerCert(_ trusted: Bool, for realm: String) {
@@ -96,7 +96,7 @@ final class AuthSettingsStore: ObservableObject {
         } else {
             trustedCertRealms.remove(realm)
         }
-        UserDefaults.standard.set(Array(trustedCertRealms).sorted(), forKey: Self.trustedCertRealmsKey)
+        AppUserDefaults.shared.set(Array(trustedCertRealms).sorted(), forKey: Self.trustedCertRealmsKey)
     }
 
     func isCertTrusted(for realm: String) -> Bool {
@@ -107,7 +107,7 @@ final class AuthSettingsStore: ObservableObject {
         guard !knownRealms.contains(realm) else { return }
         knownRealms.append(realm)
         knownRealms.sort()
-        UserDefaults.standard.set(knownRealms, forKey: Self.knownRealmsKey)
+        AppUserDefaults.shared.set(knownRealms, forKey: Self.knownRealmsKey)
     }
 
     // MARK: - 认证弹窗
