@@ -36,6 +36,23 @@ struct ProcessRunnerTests {
         #expect(result.stdoutText.trimmingCharacters(in: .whitespacesAndNewlines) == "/private/tmp")
     }
 
+    @Test("缺少 locale 时自动补全 UTF-8")
+    func injectsUTF8Locale() async throws {
+        let result = try await ProcessRunner.run(
+            executable: URL(fileURLWithPath: "/usr/bin/printenv"),
+            arguments: ["LANG", "LC_ALL"],
+            environment: [
+                "HOME": NSHomeDirectory(),
+                "PATH": "/usr/bin:/bin",
+                "LANG": "",
+                "LC_ALL": "",
+            ]
+        )
+        #expect(result.exitCode == 0)
+        let lines = result.stdoutText.split(separator: "\n").map(String.init)
+        #expect(lines.contains("en_US.UTF-8"))
+    }
+
     @Test("可执行文件不存在时抛错")
     func launchFailure() async {
         await #expect(throws: ProcessRunnerError.self) {

@@ -27,7 +27,7 @@ public enum SvnBinaryLocator {
         for directory in searchDirectories {
             let path = "\(directory)/\(name)"
             if FileManager.default.isExecutableFile(atPath: path) {
-                return URL(fileURLWithPath: path)
+                return URL(fileURLWithPath: path).resolvingSymlinksInPath()
             }
         }
         return nil

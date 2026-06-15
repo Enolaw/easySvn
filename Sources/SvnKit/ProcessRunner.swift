@@ -116,9 +116,7 @@ public enum ProcessRunner {
         if let currentDirectory {
             process.currentDirectoryURL = currentDirectory
         }
-        if let environment {
-            process.environment = environment
-        }
+        process.environment = resolvedEnvironment(overrides: environment)
 
         let stdoutPipe = Pipe()
         let stderrPipe = Pipe()
@@ -173,5 +171,32 @@ public enum ProcessRunner {
                 box.process.terminate()
             }
         }
+    }
+
+    /// 合并子进程环境，并在缺少 UTF-8 locale 时自动补全。
+    ///
+    /// 从 Finder 双击启动的 GUI 应用通常没有 `LANG`/`LC_ALL`，
+    /// svn 会把中文路径解析错并误报 E155007（不是工作副本）。
+    private static func resolvedEnvironment(overrides: [String: String]?) -> [String: String] {
+        var env = ProcessInfo.processInfo.environment
+        if let overrides {
+            for (key, value) in overrides {
+                env[key] = value
+            }
+        }
+        ensureUTF8Locale(&env)
+        return env
+    }
+
+    private static func ensureUTF8Locale(_ env: inout [String: String]) {
+        let candidates = [env["LC_ALL"], env["LANG"], env["LC_CTYPE"]]
+            .compactMap { value -> String? in
+                guard let value, !value.isEmpty else { return nil }
+                return value.uppercased()
+            }
+        let hasUTF8 = candidates.contains { $0.contains("UTF-8") || $0.contains("UTF8") }
+        guard !hasUTF8 else { return }
+        env["LANG"] = "en_US.UTF-8"
+        env["LC_ALL"] = "en_US.UTF-8"
     }
 }
