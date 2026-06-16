@@ -5,7 +5,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
-VERSION="${1:-0.5.0-beta}"
+VERSION="${1:-0.5.1}"
 APP_NAME="easySvn"
 BUNDLE_ID="com.easysvn.app"
 DIST_DIR="dist"
