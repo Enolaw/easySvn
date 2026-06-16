@@ -55,14 +55,14 @@ public struct SvnClient: Sendable {
         if includeIgnored {
             args.append("--no-ignore")
         }
-        args += paths
+        args += Self.escapingPegRevisions(paths)
         let result = try await run(args, in: workingCopy, timeout: timeout)
         return try StatusXMLParser.parse(result.standardOutput)
     }
 
     /// 工作副本或仓库 URL 的信息。
     public func info(at path: URL) async throws -> SvnInfo {
-        let target = path.isFileURL ? path.path : path.absoluteString
+        let target = path.isFileURL ? Self.escapingPegRevision(path.path) : path.absoluteString
         let result = try await run(["info", "--xml", target])
         return try InfoXMLParser.parse(result.standardOutput)
     }
@@ -120,14 +120,21 @@ public struct SvnClient: Sendable {
     }
 
     /// 统一 diff 文本（不带参数为整个工作副本的本地修改）。
+    ///
+    /// 注意：不带版本参数的 `svn diff` 不会对工作副本路径做 peg 解析，
+    /// 因此这里必须传原始路径，**不能**追加末尾 `@`（否则报 E155010）。
     public func diff(at workingCopy: URL, paths: [String] = []) async throws -> String {
         let result = try await run(["diff"] + paths, in: workingCopy)
         return result.stdoutText
     }
 
     /// 查看某次提交对指定路径的变更（`svn diff -c REV path`）。
+    /// 带 `-c` 时 `svn diff` 会对路径做 peg 解析，故含 `@` 的路径需转义。
     public func diffChange(revision: Int, path: String, in workingCopy: URL) async throws -> String {
-        let result = try await run(["diff", "-c", String(revision), path], in: workingCopy)
+        let result = try await run(
+            ["diff", "-c", String(revision), Self.escapingPegRevision(path)],
+            in: workingCopy
+        )
         return result.stdoutText
     }
 
@@ -168,13 +175,13 @@ public struct SvnClient: Sendable {
 
     /// 将文件加入版本控制。
     public func add(paths: [String], in workingCopy: URL) async throws {
-        try await run(["add"] + paths, in: workingCopy)
+        try await run(["add"] + Self.escapingPegRevisions(paths), in: workingCopy)
     }
 
     /// 提交，返回新版本号（无法解析时为 nil）。
     @discardableResult
     public func commit(paths: [String] = [], message: String, in workingCopy: URL) async throws -> Int? {
-        let args = ["commit", "--message", message] + paths
+        let args = ["commit", "--message", message] + Self.escapingPegRevisions(paths)
         let result = try await run(args, in: workingCopy)
         // 输出末行形如 "Committed revision 5."
         if let range = result.stdoutText.range(of: #"Committed revision (\d+)"#, options: .regularExpression) {
@@ -191,7 +198,7 @@ public struct SvnClient: Sendable {
         if let revision {
             args += ["--revision", revision]
         }
-        args += paths
+        args += Self.escapingPegRevisions(paths)
         let result = try await run(args, in: workingCopy)
         // 输出末行形如 "Updated to revision 5." 或 "At revision 5."
         if let range = result.stdoutText.range(
@@ -209,17 +216,20 @@ public struct SvnClient: Sendable {
         if recursive {
             args.append("--depth=infinity")
         }
-        try await run(args + paths, in: workingCopy)
+        try await run(args + Self.escapingPegRevisions(paths), in: workingCopy)
     }
 
     /// 删除受版本控制的文件/目录。
     public func delete(paths: [String], in workingCopy: URL) async throws {
-        try await run(["delete"] + paths, in: workingCopy)
+        try await run(["delete"] + Self.escapingPegRevisions(paths), in: workingCopy)
     }
 
     /// 受版本控制的移动/重命名。
     public func move(from source: String, to destination: String, in workingCopy: URL) async throws {
-        try await run(["move", source, destination], in: workingCopy)
+        try await run(
+            ["move", Self.escapingPegRevision(source), Self.escapingPegRevision(destination)],
+            in: workingCopy
+        )
     }
 
     /// 清理工作副本（解除残留锁定）。
@@ -230,7 +240,7 @@ public struct SvnClient: Sendable {
     /// 读取目录/文件属性。
     public func propget(_ name: String, at path: String, in workingCopy: URL) async throws -> String? {
         do {
-            let result = try await run(["propget", name, path], in: workingCopy)
+            let result = try await run(["propget", name, Self.escapingPegRevision(path)], in: workingCopy)
             let text = result.stdoutText.trimmingCharacters(in: .whitespacesAndNewlines)
             return text.isEmpty ? nil : text
         } catch let error as SvnError where error.exitCode != 0 {
@@ -251,7 +261,7 @@ public struct SvnClient: Sendable {
             lines.removeLast()
         }
         let value = lines.joined(separator: "\n")
-        try await run(["propset", "svn:ignore", value, directory], in: workingCopy)
+        try await run(["propset", "svn:ignore", value, Self.escapingPegRevision(directory)], in: workingCopy)
     }
 
     /// 从目录的 `svn:ignore` 中移除模式；无剩余项时删除属性。
@@ -264,10 +274,10 @@ public struct SvnClient: Sendable {
             lines.removeLast()
         }
         if lines.isEmpty {
-            try await run(["propdel", "svn:ignore", directory], in: workingCopy)
+            try await run(["propdel", "svn:ignore", Self.escapingPegRevision(directory)], in: workingCopy)
         } else {
             let value = lines.joined(separator: "\n")
-            try await run(["propset", "svn:ignore", value, directory], in: workingCopy)
+            try await run(["propset", "svn:ignore", value, Self.escapingPegRevision(directory)], in: workingCopy)
         }
     }
 
@@ -277,12 +287,15 @@ public struct SvnClient: Sendable {
         accept: SvnResolveAccept,
         in workingCopy: URL
     ) async throws {
-        try await run(["resolve", "--accept=\(accept.rawValue)"] + paths, in: workingCopy)
+        try await run(
+            ["resolve", "--accept=\(accept.rawValue)"] + Self.escapingPegRevisions(paths),
+            in: workingCopy
+        )
     }
 
     /// 标记冲突已解决（`svn resolved`）。
     public func markResolved(paths: [String], in workingCopy: URL) async throws {
-        try await run(["resolved"] + paths, in: workingCopy)
+        try await run(["resolved"] + Self.escapingPegRevisions(paths), in: workingCopy)
     }
 
     /// 读取冲突文件的三方文本。
@@ -436,6 +449,23 @@ public struct SvnClient: Sendable {
             return Int(text[range].filter(\.isNumber))
         }
         return nil
+    }
+
+    // MARK: - Peg 版本转义
+
+    /// 转义路径中的 peg 版本分隔符 `@`。
+    ///
+    /// SVN 会把路径中最后一个 `@` 之后的内容解析为 peg 版本（如 `foo@12`），
+    /// 因此像 `icon@2x.png` 这类含 `@` 的文件名会报
+    /// `a peg revision is not allowed here`。在含 `@` 的路径末尾追加一个
+    /// 空的 `@` 即可禁用该解析（SVN 官方推荐做法）。
+    static func escapingPegRevision(_ path: String) -> String {
+        path.contains("@") ? path + "@" : path
+    }
+
+    /// 对一组路径批量应用 ``escapingPegRevision(_:)``。
+    static func escapingPegRevisions(_ paths: [String]) -> [String] {
+        paths.map(escapingPegRevision)
     }
 
     // MARK: - 底层执行

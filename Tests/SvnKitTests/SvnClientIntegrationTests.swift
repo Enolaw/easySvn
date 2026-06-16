@@ -67,6 +67,51 @@ struct SvnClientIntegrationTests {
         #expect(entries.isEmpty)
     }
 
+    @Test("含 @ 的文件名可正常 add / commit / diff / revert")
+    func atSignFilename() async throws {
+        let repo = try await TestRepository.make()
+        defer { repo.cleanup() }
+        let client = repo.client
+
+        // 前端构建产物常见的 @2x 命名，路径里的 @ 会被 svn 误解析为 peg 版本
+        let name = "button-前往我的@2x.ed418296.png"
+
+        // 1. add + commit
+        try repo.write(name, contents: "image-bytes\n")
+        try await client.add(paths: [name], in: repo.workingCopy)
+        let revision = try await client.commit(message: "add @2x asset", in: repo.workingCopy)
+        #expect(revision == 1)
+        var entries = try await client.status(at: repo.workingCopy)
+        #expect(entries.isEmpty)
+
+        // 2. 修改后 status 能识别（含 @ 路径不被误判为 peg 版本）
+        try repo.write(name, contents: "image-bytes-v2\n")
+        entries = try await client.status(at: repo.workingCopy)
+        #expect(entries.count == 1)
+        #expect(entries[0].itemStatus == .modified)
+
+        // 3. 本地 diff（无版本参数，使用原始路径）
+        let localDiff = try await client.diff(at: repo.workingCopy)
+        #expect(localDiff.contains("-image-bytes"))
+        #expect(localDiff.contains("+image-bytes-v2"))
+
+        // 4. 指定版本的 diff（带 -c，需对含 @ 路径转义）
+        let changeDiff = try await client.diffChange(revision: 1, path: name, in: repo.workingCopy)
+        #expect(changeDiff.contains("button-前往我的"))
+
+        // 5. revert
+        try await client.revert(paths: [name], in: repo.workingCopy)
+        entries = try await client.status(at: repo.workingCopy)
+        #expect(entries.isEmpty)
+    }
+
+    @Test("escapingPegRevision 仅对含 @ 的路径追加末尾 @")
+    func escapingPegRevision() {
+        #expect(SvnClient.escapingPegRevision("a/b/c.png") == "a/b/c.png")
+        #expect(SvnClient.escapingPegRevision("icon@2x.png") == "icon@2x.png@")
+        #expect(SvnClient.escapingPegRevisions(["a.png", "b@2x.png"]) == ["a.png", "b@2x.png@"])
+    }
+
     @Test("info 反映最后一次提交")
     func infoAfterCommit() async throws {
         let repo = try await TestRepository.make()
