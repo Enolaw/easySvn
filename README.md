@@ -85,3 +85,7 @@ let changes = try await client.status(at: workingCopyURL)   // 本地变更
 let history = try await client.log(at: wcPath, limit: 100)  // 提交历史
 let tree = try await client.list("https://svn.example.com/repo/trunk") // 远程浏览
 ```
+
+## 许可证
+
+本项目基于 [MIT 许可证](LICENSE) 开源，可自由使用、修改与分发，仅需保留版权声明。
