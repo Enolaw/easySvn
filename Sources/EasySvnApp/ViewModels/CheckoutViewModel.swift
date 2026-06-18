@@ -44,7 +44,9 @@ final class CheckoutViewModel: ObservableObject {
     func checkout() async -> URL? {
         guard canCheckout, let authStore else { return nil }
 
-        let url = repositoryURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        let url = RepositoryURLHelper.displayDecoded(
+            repositoryURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        )
         let destination = URL(fileURLWithPath: destinationPath)
         let revisionArg: String? = {
             guard useSpecificRevision else { return nil }

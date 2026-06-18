@@ -27,8 +27,8 @@ final class SwitchBranchViewModel: ObservableObject {
         do {
             let client = try makeClient(for: workingCopy)
             let info = try await client.info(at: workingCopy.directoryURL)
-            currentURL = info.url
-            repositoryRoot = info.repositoryRoot
+            currentURL = RepositoryURLHelper.displayDecoded(info.url)
+            repositoryRoot = RepositoryURLHelper.displayDecoded(info.repositoryRoot)
             let entries = try await client.status(at: workingCopy.directoryURL)
             localChangeCount = entries.count
         } catch {

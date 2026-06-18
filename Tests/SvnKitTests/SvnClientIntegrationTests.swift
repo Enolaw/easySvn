@@ -112,6 +112,80 @@ struct SvnClientIntegrationTests {
         #expect(SvnClient.escapingPegRevisions(["a.png", "b@2x.png"]) == ["a.png", "b@2x.png@"])
     }
 
+    @Test("嵌套 dist 路径可用 --parents 加入版本控制")
+    func nestedDistAddWithParents() async throws {
+        let repo = try await TestRepository.make()
+        defer { repo.cleanup() }
+        let client = repo.client
+
+        let distDir = repo.workingCopy.appendingPathComponent("project/4.10.1/production/dist/img", isDirectory: true)
+        try FileManager.default.createDirectory(at: distDir, withIntermediateDirectories: true)
+        try "img\n".write(to: distDir.appendingPathComponent("icon.png"), atomically: true, encoding: .utf8)
+        try FileManager.default.createDirectory(
+            at: repo.workingCopy.appendingPathComponent("project/4.10.1/src"),
+            withIntermediateDirectories: true
+        )
+        try repo.write("project/4.10.1/src/main.js", contents: "src\n")
+
+        try await client.add(paths: ["project/4.10.1/production/dist"], in: repo.workingCopy)
+        let entries = try await client.status(at: repo.workingCopy)
+        #expect(entries.contains { $0.path == "project/4.10.1/production/dist/img/icon.png" && $0.itemStatus == .added })
+        #expect(entries.contains { $0.path == "project/4.10.1/src" && $0.itemStatus == .unversioned })
+    }
+
+    @Test("dist 目录内已有受控文件时可用 --force 继续添加新文件")
+    func mixedDistAddWithForce() async throws {
+        let repo = try await TestRepository.make()
+        defer { repo.cleanup() }
+        let client = repo.client
+
+        let distDir = repo.workingCopy.appendingPathComponent("project/4.10.1/prod/dist/assets", isDirectory: true)
+        try FileManager.default.createDirectory(at: distDir, withIntermediateDirectories: true)
+        try "old\n".write(to: distDir.appendingPathComponent("old.js"), atomically: true, encoding: .utf8)
+        try await client.add(paths: ["project/4.10.1/prod/dist"], in: repo.workingCopy)
+        try await client.commit(message: "base dist", in: repo.workingCopy)
+        try "new\n".write(to: distDir.appendingPathComponent("new.js"), atomically: true, encoding: .utf8)
+
+        try await client.add(
+            paths: ["project/4.10.1/prod/dist"],
+            force: true,
+            in: repo.workingCopy
+        )
+        let entries = try await client.status(at: repo.workingCopy)
+        #expect(entries.contains { $0.path == "project/4.10.1/prod/dist/assets/new.js" && $0.itemStatus == .added })
+    }
+
+    @Test("混合文件列表使用 --force 时忽略已受控项且退出成功")
+    func mixedFileListAddWithForce() async throws {
+        let repo = try await TestRepository.make()
+        defer { repo.cleanup() }
+        let client = repo.client
+
+        let distDir = repo.workingCopy.appendingPathComponent("ui/3.11.1/test/dist/assets", isDirectory: true)
+        try FileManager.default.createDirectory(at: distDir, withIntermediateDirectories: true)
+        try "old\n".write(to: distDir.appendingPathComponent("old.js"), atomically: true, encoding: .utf8)
+        try "html\n".write(
+            to: repo.workingCopy.appendingPathComponent("ui/3.11.1/test/dist/index.html"),
+            atomically: true,
+            encoding: .utf8
+        )
+        try await client.add(paths: ["ui/3.11.1/test/dist"], in: repo.workingCopy)
+        try await client.commit(message: "base", in: repo.workingCopy)
+        try "new\n".write(to: distDir.appendingPathComponent("new.js"), atomically: true, encoding: .utf8)
+
+        try await client.add(
+            paths: [
+                "ui/3.11.1/test/dist/assets/old.js",
+                "ui/3.11.1/test/dist/assets/new.js",
+                "ui/3.11.1/test/dist/index.html",
+            ],
+            force: true,
+            in: repo.workingCopy
+        )
+        let entries = try await client.status(at: repo.workingCopy)
+        #expect(entries.contains { $0.path == "ui/3.11.1/test/dist/assets/new.js" && $0.itemStatus == .added })
+    }
+
     @Test("info 反映最后一次提交")
     func infoAfterCommit() async throws {
         let repo = try await TestRepository.make()

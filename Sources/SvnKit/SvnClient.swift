@@ -174,8 +174,22 @@ public struct SvnClient: Sendable {
     }
 
     /// 将文件加入版本控制。
-    public func add(paths: [String], in workingCopy: URL) async throws {
-        try await run(["add"] + Self.escapingPegRevisions(paths), in: workingCopy)
+    /// - Parameter parents: 为 true 时使用 `--parents`，可添加深层路径并自动补全中间目录。
+    /// - Parameter force: 为 true 时使用 `--force`，目录内已有受控文件时仍继续添加其余项。
+    public func add(
+        paths: [String],
+        parents: Bool = true,
+        force: Bool = false,
+        in workingCopy: URL
+    ) async throws {
+        var args = ["add"]
+        if parents {
+            args.append("--parents")
+        }
+        if force {
+            args.append("--force")
+        }
+        try await run(args + Self.escapingPegRevisions(paths), in: workingCopy)
     }
 
     /// 提交，返回新版本号（无法解析时为 nil）。

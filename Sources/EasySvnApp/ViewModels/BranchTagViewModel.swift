@@ -39,8 +39,8 @@ final class BranchTagViewModel: ObservableObject {
         do {
             let client = try makeClient(for: workingCopy)
             let info = try await client.info(at: workingCopy.directoryURL)
-            sourceURL = info.url
-            repositoryRoot = info.repositoryRoot
+            sourceURL = RepositoryURLHelper.displayDecoded(info.url)
+            repositoryRoot = RepositoryURLHelper.displayDecoded(info.repositoryRoot)
             name = RepositoryURLHelper.lastComponent(of: info.url)
             applySuggestedDestination()
             applySuggestedName()

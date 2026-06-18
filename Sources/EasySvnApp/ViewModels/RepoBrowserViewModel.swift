@@ -75,11 +75,12 @@ final class RepoBrowserViewModel: ObservableObject {
     }
 
     func copyRemoteURL(_ url: String) {
+        let decoded = RepositoryURLHelper.displayDecoded(url)
         let text: String
         if let rev = revisionArgument {
-            text = "\(url)@\(rev)"
+            text = "\(decoded)@\(rev)"
         } else {
-            text = url
+            text = decoded
         }
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(text, forType: .string)

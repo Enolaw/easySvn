@@ -19,7 +19,7 @@ struct AuthPromptSheet: View {
             Text("需要认证")
                 .font(.headline)
 
-            Text(request.repositoryURL)
+            Text(request.repositoryURL.displayDecodedURL)
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .lineLimit(2)

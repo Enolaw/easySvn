@@ -15,7 +15,7 @@ struct SwitchBranchSheet: View {
                 .font(.headline)
 
             if !viewModel.currentURL.isEmpty {
-                Text("当前：\(viewModel.currentURL.displayDecodedURL)")
+                Text("当前：\(viewModel.currentURL)")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(2)

@@ -53,7 +53,7 @@ final class MergeWizardViewModel: ObservableObject {
         do {
             let client = try makeClient(for: workingCopy)
             let info = try await client.info(at: workingCopy.directoryURL)
-            sourceURL = info.url
+            sourceURL = RepositoryURLHelper.displayDecoded(info.url)
             await refreshMergeinfo(workingCopy: workingCopy)
         } catch {
             errorMessage = error.localizedDescription

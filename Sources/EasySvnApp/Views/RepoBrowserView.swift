@@ -98,7 +98,7 @@ struct RepoBrowserView: View {
                 .onAppear {
                     checkoutViewModel.configure(authStore: authStore)
                     if let url = viewModel.selectedURL, viewModel.selectedIsDirectory {
-                        checkoutViewModel.repositoryURL = url
+                        checkoutViewModel.repositoryURL = RepositoryURLHelper.displayDecoded(url)
                     }
                 }
             }
@@ -364,7 +364,7 @@ struct RepoBrowserView: View {
                 showLog(for: item)
             }
             Button("从此处检出…") {
-                checkoutViewModel.repositoryURL = item.url
+                checkoutViewModel.repositoryURL = RepositoryURLHelper.displayDecoded(item.url)
                 activeSheet = .checkout
             }
             Button("新建子目录…") {

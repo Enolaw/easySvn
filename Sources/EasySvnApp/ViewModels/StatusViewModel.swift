@@ -369,7 +369,7 @@ final class StatusViewModel: ObservableObject {
                 )
                 try Task.checkCancellation()
                 guard isActiveSession(session) else { return }
-                mergeIncrementalStatus(updated, focusPaths: focusPaths)
+                mergeIncrementalStatus(updated, focusPaths: focusPaths, workingCopyRoot: workingCopy.directoryURL)
                 return
             }
 
@@ -384,8 +384,7 @@ final class StatusViewModel: ObservableObject {
             )
             try Task.checkCancellation()
             guard isActiveSession(session) else { return }
-            self.entries = loadedEntries
-            rebuildDisplayState()
+            applyLoadedEntries(loadedEntries, workingCopyRoot: workingCopy.directoryURL)
             if !preserveSelection {
                 selectedPaths = Set(committableEntries.map(\.path))
             } else {
@@ -615,9 +614,14 @@ final class StatusViewModel: ObservableObject {
     }
 
     func addToVersionControl(workingCopy: WorkingCopy, paths: [String]) async {
-        guard let allowed = preparePathsForAdd(paths, workingCopy: workingCopy).allowed else { return }
+        let preparation = preparePathsForAdd(paths, workingCopy: workingCopy)
+        guard let allowed = preparation.allowed else { return }
         await perform(workingCopy: workingCopy, loadingMessage: "正在加入版本控制…") { client in
-            try await client.add(paths: allowed, in: workingCopy.directoryURL)
+            try await client.add(
+                paths: allowed,
+                force: true,
+                in: workingCopy.directoryURL
+            )
             return "已加入版本控制 \(allowed.count) 个文件"
         }
     }
@@ -638,10 +642,13 @@ final class StatusViewModel: ObservableObject {
 
         do {
             let client = try makeClient(for: workingCopy)
-            try await client.add(paths: allowed, in: workingCopy.directoryURL)
+            try await client.add(
+                paths: allowed,
+                force: true,
+                in: workingCopy.directoryURL
+            )
             await refresh(
                 workingCopy: workingCopy,
-                changedPaths: allowed,
                 managesLoadingUI: false,
                 preserveSelection: true
             )
@@ -668,33 +675,89 @@ final class StatusViewModel: ObservableObject {
         }
     }
 
+    private struct PreparedAddPaths {
+        let allowed: [String]?
+        let skippedNote: String?
+    }
+
     private func preparePathsForAdd(
         _ paths: [String],
         workingCopy: WorkingCopy
-    ) -> (allowed: [String]?, skippedNote: String?) {
-        guard !paths.isEmpty else { return (nil, nil) }
+    ) -> PreparedAddPaths {
+        let unversionedInput = filterUnversionedPaths(paths)
+        guard !unversionedInput.isEmpty else {
+            operationError = "所选路径均已受版本控制，无需再次添加"
+            return PreparedAddPaths(allowed: nil, skippedNote: nil)
+        }
+
         let evaluation = UnversionedAddPolicy.evaluate(
-            paths: paths,
+            paths: unversionedInput,
             workingCopyRoot: workingCopy.directoryURL
         )
-        let skippedNote: String?
+        var notes: [String] = []
+        if !evaluation.redirected.isEmpty {
+            notes.append(UnversionedAddPolicy.formatRedirectedSummary(redirected: evaluation.redirected))
+        }
         if !evaluation.rejected.isEmpty {
-            let details = UnversionedAddPolicy.formatRejectedSummary(
+            notes.append(UnversionedAddPolicy.formatRejectedSummary(
                 title: "已跳过 \(evaluation.rejected.count) 项",
                 rejected: evaluation.rejected
-            )
-            skippedNote = details
-            if evaluation.allowed.isEmpty {
-                operationError = UnversionedAddPolicy.formatRejectedSummary(
-                    title: "未执行添加",
-                    rejected: evaluation.rejected
-                )
-                return (nil, skippedNote)
-            }
-        } else {
-            skippedNote = nil
+            ))
         }
-        return (evaluation.allowed.isEmpty ? nil : evaluation.allowed, skippedNote)
+        let skippedNote = notes.isEmpty ? nil : notes.joined(separator: "\n\n")
+        if !evaluation.rejected.isEmpty && evaluation.allowed.isEmpty {
+            operationError = UnversionedAddPolicy.formatRejectedSummary(
+                title: "未执行添加",
+                rejected: evaluation.rejected
+            )
+            return PreparedAddPaths(allowed: nil, skippedNote: skippedNote)
+        }
+
+        let allowed = resolveUnversionedAddTargets(
+            from: evaluation.allowed,
+            workingCopyRoot: workingCopy.directoryURL
+        )
+        if allowed.isEmpty {
+            operationError = "所选路径均已受版本控制，无需再次添加"
+            return PreparedAddPaths(allowed: nil, skippedNote: skippedNote)
+        }
+        return PreparedAddPaths(allowed: allowed, skippedNote: skippedNote)
+    }
+
+    /// 仅保留当前状态列表中标记为未版本控制的路径。
+    private func filterUnversionedPaths(_ paths: [String]) -> [String] {
+        let unversionedSet = Set(entries.filter { $0.itemStatus == .unversioned }.map(\.path))
+        return paths.filter { unversionedSet.contains($0) }
+    }
+
+    /// 将目录路径展开为未版本控制叶子项；若仍为目录则保留目录路径供 `--force` 添加。
+    private func resolveUnversionedAddTargets(
+        from paths: [String],
+        workingCopyRoot: URL
+    ) -> [String] {
+        let unversionedPaths = entries.filter { $0.itemStatus == .unversioned }.map(\.path)
+        var resolved: [String] = []
+
+        for path in paths {
+            if unversionedPaths.contains(path) {
+                resolved.append(path)
+                continue
+            }
+            let descendants = unversionedPaths.filter { $0.hasPrefix(path + "/") }
+            if !descendants.isEmpty {
+                resolved.append(contentsOf: descendants)
+            } else if isDirectoryPath(path, workingCopyRoot: workingCopyRoot) {
+                resolved.append(path)
+            }
+        }
+        return Array(Set(resolved)).sorted()
+    }
+
+    private func isDirectoryPath(_ path: String, workingCopyRoot: URL) -> Bool {
+        var isDirectory: ObjCBool = false
+        let url = workingCopyRoot.appendingPathComponent(path).standardizedFileURL
+        return FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory)
+            && isDirectory.boolValue
     }
 
     /// 统一的操作执行：忙碌状态、错误弹窗、成功提示、完成后刷新。
@@ -768,11 +831,21 @@ final class StatusViewModel: ObservableObject {
         return true
     }
 
-    private func mergeIncrementalStatus(_ updated: [SvnStatusEntry], focusPaths: [String]) {
+    private func applyLoadedEntries(_ loadedEntries: [SvnStatusEntry], workingCopyRoot: URL) {
+        entries = UnversionedDirectoryExpander.expand(loadedEntries, workingCopyRoot: workingCopyRoot)
+        rebuildDisplayState()
+    }
+
+    private func mergeIncrementalStatus(
+        _ updated: [SvnStatusEntry],
+        focusPaths: [String],
+        workingCopyRoot: URL
+    ) {
         var affected = Set(focusPaths)
         affected.formUnion(updated.map(\.path))
         entries.removeAll { affected.contains($0.path) }
         entries.append(contentsOf: updated)
+        entries = UnversionedDirectoryExpander.expand(entries, workingCopyRoot: workingCopyRoot)
         rebuildDisplayState()
     }
 

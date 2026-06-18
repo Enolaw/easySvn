@@ -52,13 +52,6 @@ struct BranchTagSheet: View {
                     .onChange(of: viewModel.destinationURL) { _ in
                         viewModel.onDestinationEdited()
                     }
-                if !viewModel.destinationURL.isEmpty {
-                    Text(viewModel.destinationURL.displayDecodedURL)
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(2)
-                        .truncationMode(.middle)
-                }
             }
 
             labeledField("提交日志", text: $viewModel.message)
