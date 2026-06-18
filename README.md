@@ -70,7 +70,7 @@ swift test
 - [x] M3：冲突解决（冲突列表、三方合并、快捷 resolve、树冲突信息）
 - [x] M3：分支与合并（创建分支/标签、Switch、Merge 向导、mergeinfo）
 - [x] M3：仓库浏览器（懒加载目录树、远程 CRUD、文件预览/日志、从此处检出）
-- [x] M3：体验补全 + v0.5 beta（**v0.5.1** 已发布，见 [更新说明](docs/CHANGELOG.md)）
+- [x] M3：体验补全 + v0.5 beta（**v0.5.2** 已发布，见 [更新说明](docs/CHANGELOG.md)）
 - [ ] M4：Finder 集成（徽章 + 右键菜单，需 Xcode App target）
 
 ## 引擎层使用示例

@@ -1,4 +1,4 @@
-# easySvn v0.5.1 安装说明
+# easySvn v0.5.2 安装说明
 
 ## 环境要求
 
@@ -25,13 +25,13 @@ svn --version
 
 ### 方式一：DMG（推荐）
 
-1. 双击 `easySvn-0.5.1-macos-arm64.dmg` 挂载磁盘镜像
+1. 双击 `easySvn-0.5.2-macos-arm64.dmg` 挂载磁盘镜像
 2. 将窗口中的 `easySvn.app` 拖入 **Applications**（应用程序）文件夹
 3. 弹出磁盘镜像（将桌面上的 easySvn 磁盘拖入废纸篓，或右键推出）
 
 ### 方式二：ZIP
 
-1. 解压 `easySvn-0.5.1-macos-arm64.zip`
+1. 解压 `easySvn-0.5.2-macos-arm64.zip`
 2. 将 `easySvn.app` 拖入「应用程序」文件夹
 
 ## 首次打开
