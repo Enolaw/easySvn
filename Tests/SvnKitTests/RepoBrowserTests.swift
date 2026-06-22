@@ -21,6 +21,27 @@ struct RepositoryURLHelperTests {
         )
     }
 
+    @Test("含未编码中文的 URL 仍能提取父路径")
+    func parentURLWithRawChinese() {
+        #expect(
+            RepositoryURLHelper.parentURL(of: "https://host/svn/卡面业务/复旦微结算")
+                == "https://host/svn/卡面业务"
+        )
+    }
+
+    @Test("根 URL 没有可返回的父路径")
+    func parentURLAtRoot() {
+        #expect(RepositoryURLHelper.parentURL(of: "https://host") == nil)
+    }
+
+    @Test("含未编码中文的 URL 取末段目录名")
+    func lastComponentWithRawChinese() {
+        #expect(
+            RepositoryURLHelper.lastComponent(of: "https://host/svn/卡面业务/复旦微结算")
+                == "复旦微结算"
+        )
+    }
+
     @Test("解码 URL 中的中文路径")
     func displayDecodedChinesePath() {
         let encoded = "https://svn.example.com/repo/%E5%8D%A1%E9%9D%A2%E4%B8%9A%E5%8A%A1/trunk"

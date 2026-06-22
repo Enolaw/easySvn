@@ -18,20 +18,25 @@ public enum RepositoryURLHelper {
     }
 
     public static func lastComponent(of url: String) -> String {
-        let trimmed = url.hasSuffix("/") ? String(url.dropLast()) : url
-        let component = URL(string: trimmed)?.lastPathComponent ?? trimmed
+        var trimmed = url
+        while trimmed.hasSuffix("/") { trimmed.removeLast() }
+        guard let slashIndex = trimmed.lastIndex(of: "/") else {
+            return displayDecoded(trimmed)
+        }
+        let component = String(trimmed[trimmed.index(after: slashIndex)...])
         return displayDecoded(component)
     }
 
     public static func parentURL(of url: String) -> String? {
-        let trimmed = url.hasSuffix("/") ? String(url.dropLast()) : url
-        guard let url = URL(string: trimmed) else { return nil }
-        let parent = url.deletingLastPathComponent()
-        var parentString = parent.absoluteString
-        if parentString.hasSuffix("/") {
-            parentString = String(parentString.dropLast())
+        var trimmed = url
+        while trimmed.hasSuffix("/") { trimmed.removeLast() }
+        guard let slashIndex = trimmed.lastIndex(of: "/") else { return nil }
+        let parent = String(trimmed[..<slashIndex])
+        // 不要越过协议部分，如 "https:/" 或 "file://"。
+        if parent.isEmpty || parent.hasSuffix(":/") || parent.hasSuffix(":") {
+            return nil
         }
-        if parentString == trimmed { return nil }
-        return parentString
+        if parent == trimmed { return nil }
+        return parent
     }
 }
