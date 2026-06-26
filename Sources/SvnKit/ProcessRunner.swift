@@ -189,13 +189,13 @@ public enum ProcessRunner {
     }
 
     private static func ensureUTF8Locale(_ env: inout [String: String]) {
-        let candidates = [env["LC_ALL"], env["LANG"], env["LC_CTYPE"]]
-            .compactMap { value -> String? in
-                guard let value, !value.isEmpty else { return nil }
-                return value.uppercased()
-            }
-        let hasUTF8 = candidates.contains { $0.contains("UTF-8") || $0.contains("UTF8") }
-        guard !hasUTF8 else { return }
+        func hasUTF8(_ key: String) -> Bool {
+            guard let value = env[key], !value.isEmpty else { return false }
+            let upper = value.uppercased()
+            return upper.contains("UTF-8") || upper.contains("UTF8")
+        }
+        // 仅当 LANG / LC_ALL 已含 UTF-8 时跳过；LC_CTYPE 不能代替二者（GUI 启动时常缺失 LANG/LC_ALL）。
+        guard !hasUTF8("LC_ALL"), !hasUTF8("LANG") else { return }
         env["LANG"] = "en_US.UTF-8"
         env["LC_ALL"] = "en_US.UTF-8"
     }

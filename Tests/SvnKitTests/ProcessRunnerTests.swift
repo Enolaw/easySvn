@@ -46,6 +46,7 @@ struct ProcessRunnerTests {
                 "PATH": "/usr/bin:/bin",
                 "LANG": "",
                 "LC_ALL": "",
+                "LC_CTYPE": "",
             ]
         )
         #expect(result.exitCode == 0)
