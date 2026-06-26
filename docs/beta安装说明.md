@@ -1,9 +1,11 @@
-# easySvn v0.5.2 安装说明
+# easySvn 安装说明
+
+预编译包可从 [GitHub Releases](https://github.com/Enolaw/easySvn/releases) 下载。以下以 **v0.5.2** 为例。
 
 ## 环境要求
 
 - **macOS 13** 或更高版本
-- **Apple 芯片（M 系列）** Mac（当前 beta 包为 arm64 构建）
+- **Apple 芯片（M 系列）** Mac（当前发布包为 arm64 构建）
 
 ## 安装前准备
 
@@ -21,7 +23,7 @@ svn --version
 
 ## 安装方式
 
-分发包提供 **DMG** 与 **ZIP** 两种格式，任选其一即可。
+Release 页面提供 **DMG** 与 **ZIP** 两种格式，任选其一即可。
 
 ### 方式一：DMG（推荐）
 
@@ -36,7 +38,7 @@ svn --version
 
 ## 首次打开
 
-本 beta 为内部试用包，未经 Apple 公证。首次启动时请按以下方式操作：
+预编译包未经 Apple 公证，首次启动时请按以下方式操作：
 
 1. **不要直接双击**
 2. 在「应用程序」中找到 `easySvn.app`，**右键 →「打开」**
@@ -56,6 +58,10 @@ svn --version
 2. 点击左下角 **「检出…」** 从远程仓库检出，或 **「添加工作副本」** 选择本地已有目录
 3. 连接需认证的服务器时，按提示输入凭据（可选择保存到钥匙串）
 
+## 从源码运行
+
+若不想使用预编译包，也可克隆仓库后本地运行，见 [README](../README.md#运行图形界面)。
+
 ## 常见问题
 
 **提示找不到 svn 命令行工具**
@@ -68,12 +74,13 @@ svn --version
 
 **Intel Mac 能否使用**
 
-当前 beta 仅提供 Apple 芯片（arm64）版本，Intel Mac 暂不支持。
+当前 Release 仅提供 Apple 芯片（arm64）版本。Intel Mac 可从源码自行编译运行。
 
 ## 反馈
 
-试用中如遇问题或建议，请联系分发者并尽量附上：
+使用中如遇问题或有功能建议，请在 GitHub 提交 [Issue](https://github.com/Enolaw/easySvn/issues)，并尽量附上：
 
 - macOS 版本
+- easySvn 版本号
 - 操作步骤与报错截图
 - 是否已安装 Subversion 及 `svn --version` 输出

@@ -7,6 +7,8 @@ macOS 原生 SVN 图形化客户端（开发中），对标 Windows 平台的 To
 - [需求说明书](docs/需求说明书.md)
 - [开发计划](docs/开发计划.md)
 - [更新说明](docs/CHANGELOG.md)
+- [安装说明](docs/beta安装说明.md)
+- [贡献指南](CONTRIBUTING.md)
 
 ## 项目结构
 
