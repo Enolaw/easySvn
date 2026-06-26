@@ -1,6 +1,6 @@
 # easySvn
 
-macOS 原生 SVN 图形化客户端（开发中），对标 Windows 平台的 TortoiseSVN。
+macOS 原生 SVN 图形化客户端（开发中），希望让 Subversion 的日常操作更简单、更便捷。
 
 ## 文档
 
