@@ -616,13 +616,23 @@ final class StatusViewModel: ObservableObject {
     func addToVersionControl(workingCopy: WorkingCopy, paths: [String]) async {
         let preparation = preparePathsForAdd(paths, workingCopy: workingCopy)
         guard let allowed = preparation.allowed else { return }
-        await perform(workingCopy: workingCopy, loadingMessage: "正在加入版本控制…") { client in
+        let skippedNote = preparation.skippedNote
+        await perform(
+            workingCopy: workingCopy,
+            loadingMessage: "正在加入版本控制…",
+            changedPaths: allowed,
+            preserveSelection: true
+        ) { client in
             try await client.add(
                 paths: allowed,
                 force: true,
                 in: workingCopy.directoryURL
             )
-            return "已加入版本控制 \(allowed.count) 个文件"
+            var message = "已加入版本控制 \(allowed.count) 个文件"
+            if let skippedNote {
+                message += "\n\(skippedNote)"
+            }
+            return message
         }
     }
 
@@ -654,7 +664,10 @@ final class StatusViewModel: ObservableObject {
             )
             selectedPaths = Set(
                 entries
-                    .filter { allowed.contains($0.path) && $0.isCommittable }
+                    .filter { entry in
+                        entry.isCommittable
+                            && allowed.contains { WorkingCopyRelativePath.pathsEqual($0, entry.path) }
+                    }
                     .map(\.path)
             )
             var message = "已加入版本控制 \(allowed.count) 个文件，请提交"
@@ -726,8 +739,12 @@ final class StatusViewModel: ObservableObject {
 
     /// 仅保留当前状态列表中标记为未版本控制的路径。
     private func filterUnversionedPaths(_ paths: [String]) -> [String] {
-        let unversionedSet = Set(entries.filter { $0.itemStatus == .unversioned }.map(\.path))
-        return paths.filter { unversionedSet.contains($0) }
+        let unversionedSet = Set(
+            entries
+                .filter { $0.itemStatus == .unversioned }
+                .map { WorkingCopyRelativePath.normalize($0.path) }
+        )
+        return paths.filter { unversionedSet.contains(WorkingCopyRelativePath.normalize($0)) }
     }
 
     /// 将目录路径展开为未版本控制叶子项；若仍为目录则保留目录路径供 `--force` 添加。
@@ -735,22 +752,27 @@ final class StatusViewModel: ObservableObject {
         from paths: [String],
         workingCopyRoot: URL
     ) -> [String] {
-        let unversionedPaths = entries.filter { $0.itemStatus == .unversioned }.map(\.path)
+        let unversionedPaths = entries
+            .filter { $0.itemStatus == .unversioned }
+            .map { WorkingCopyRelativePath.normalize($0.path) }
         var resolved: [String] = []
 
         for path in paths {
-            if unversionedPaths.contains(path) {
-                resolved.append(path)
+            let normalized = WorkingCopyRelativePath.normalize(path)
+            if unversionedPaths.contains(normalized) {
+                resolved.append(normalized)
                 continue
             }
-            let descendants = unversionedPaths.filter { $0.hasPrefix(path + "/") }
+            let descendants = unversionedPaths.filter { WorkingCopyRelativePath.isSameOrAncestor(normalized, of: $0) && $0 != normalized }
             if !descendants.isEmpty {
                 resolved.append(contentsOf: descendants)
-            } else if isDirectoryPath(path, workingCopyRoot: workingCopyRoot) {
-                resolved.append(path)
+            } else if isDirectoryPath(normalized, workingCopyRoot: workingCopyRoot) {
+                resolved.append(normalized)
             }
         }
-        return Array(Set(resolved)).sorted()
+        return Array(Set(resolved))
+            .sorted()
+            .map { WorkingCopyRelativePath.resolvingOnDisk($0, workingCopyRoot: workingCopyRoot) }
     }
 
     private func isDirectoryPath(_ path: String, workingCopyRoot: URL) -> Bool {
@@ -760,16 +782,18 @@ final class StatusViewModel: ObservableObject {
             && isDirectory.boolValue
     }
 
-    /// 统一的操作执行：忙碌状态、错误弹窗、成功提示、完成后刷新。
     @discardableResult
     private func perform(
         workingCopy: WorkingCopy,
         loadingMessage: String? = nil,
+        changedPaths: [String]? = nil,
+        preserveSelection: Bool = false,
         _ operation: @escaping (SvnClient) async throws -> String
     ) async -> Bool {
         isLoading = true
         self.loadingMessage = loadingMessage
         operationMessage = nil
+        pauseWatcherBriefly()
         defer {
             isLoading = false
             self.loadingMessage = nil
@@ -778,19 +802,37 @@ final class StatusViewModel: ObservableObject {
         do {
             let client = try makeClient(for: workingCopy)
             let message = try await operation(client)
-            await refresh(workingCopy: workingCopy, managesLoadingUI: false)
+            let refreshPaths = changedPaths?.map {
+                WorkingCopyRelativePath.normalize($0)
+            }
+            await refresh(
+                workingCopy: workingCopy,
+                changedPaths: refreshPaths,
+                managesLoadingUI: false,
+                preserveSelection: preserveSelection
+            )
             operationMessage = message
             return true
         } catch {
             let repositoryURL = info?.repositoryRoot ?? info?.url ?? workingCopy.path
             if handleAuthFailure(error, repositoryURL: repositoryURL, retry: { [weak self] in
-                _ = await self?.perform(workingCopy: workingCopy, loadingMessage: loadingMessage, operation)
+                _ = await self?.perform(
+                    workingCopy: workingCopy,
+                    loadingMessage: loadingMessage,
+                    changedPaths: changedPaths,
+                    preserveSelection: preserveSelection,
+                    operation
+                )
             }) {
                 return false
             }
             operationError = Self.friendlyMessage(for: error)
             return false
         }
+    }
+
+    private func pauseWatcherBriefly() {
+        watcherPausedUntil = Date().addingTimeInterval(2)
     }
 
     private func makeClient(for workingCopy: WorkingCopy) throws -> SvnClient {
@@ -841,10 +883,11 @@ final class StatusViewModel: ObservableObject {
         focusPaths: [String],
         workingCopyRoot: URL
     ) {
-        var affected = Set(focusPaths)
-        affected.formUnion(updated.map(\.path))
-        entries.removeAll { affected.contains($0.path) }
-        entries.append(contentsOf: updated)
+        let normalizedUpdated = updated.map { $0.withNormalizedPath() }
+        var affected = Set(focusPaths.map { WorkingCopyRelativePath.normalize($0) })
+        affected.formUnion(normalizedUpdated.map(\.path))
+        entries.removeAll { affected.contains(WorkingCopyRelativePath.normalize($0.path)) }
+        entries.append(contentsOf: normalizedUpdated)
         entries = UnversionedDirectoryExpander.expand(entries, workingCopyRoot: workingCopyRoot)
         rebuildDisplayState()
     }

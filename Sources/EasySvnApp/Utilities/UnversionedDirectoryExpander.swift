@@ -13,11 +13,12 @@ enum UnversionedDirectoryExpander {
 
     /// 对 status 仅返回顶层 `? dir` 的目录，递归补全其下路径（仅用于展示）。
     static func expand(_ entries: [SvnStatusEntry], workingCopyRoot: URL) -> [SvnStatusEntry] {
-        var pathSet = Set(entries.map(\.path))
-        var result = entries
+        let normalizedEntries = entries.map { $0.withNormalizedPath() }
+        var pathSet = Set(normalizedEntries.map(\.path))
+        var result = normalizedEntries
         var extraCount = 0
 
-        let unversionedDirs = entries.filter {
+        let unversionedDirs = normalizedEntries.filter {
             $0.itemStatus == .unversioned && isDirectory($0.path, at: workingCopyRoot)
         }
 
@@ -28,14 +29,28 @@ enum UnversionedDirectoryExpander {
                 workingCopyRoot: workingCopyRoot,
                 remaining: maxExtraEntries - extraCount
             )
-            for path in discovered where !pathSet.contains(path) {
-                result.append(SvnStatusEntry(path: path, itemStatus: .unversioned, propsStatus: .none))
-                pathSet.insert(path)
+            for path in discovered {
+                let normalized = WorkingCopyRelativePath.normalize(path)
+                guard !pathSet.contains(normalized) else { continue }
+                guard !hasVersionedCoverage(for: normalized, in: normalizedEntries) else { continue }
+                result.append(SvnStatusEntry(path: normalized, itemStatus: .unversioned, propsStatus: .none))
+                pathSet.insert(normalized)
                 extraCount += 1
                 if extraCount >= maxExtraEntries { return result }
             }
         }
         return result
+    }
+
+    private static func hasVersionedCoverage(for path: String, in entries: [SvnStatusEntry]) -> Bool {
+        entries.contains { entry in
+            switch entry.itemStatus {
+            case .unversioned, .ignored, .none:
+                return false
+            default:
+                return WorkingCopyRelativePath.isSameOrAncestor(entry.path, of: path)
+            }
+        }
     }
 
     private static func hasStatusChild(path: String, in pathSet: Set<String>) -> Bool {

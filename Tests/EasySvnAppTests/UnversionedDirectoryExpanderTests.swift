@@ -40,3 +40,24 @@ import SvnKit
     let expanded = UnversionedDirectoryExpander.expand(statusEntries, workingCopyRoot: root)
     #expect(expanded.count == statusEntries.count)
 }
+
+@Test func unversionedDirectoryExpanderDoesNotReaddAddedChildren() throws {
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent("easysvn-expand-added-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    let dir = root.appendingPathComponent("project/assets", isDirectory: true)
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    let fileURL = dir.appendingPathComponent("icon.png")
+    try "png\n".write(to: fileURL, atomically: true, encoding: .utf8)
+
+    let statusEntries = [
+        SvnStatusEntry(path: "project/assets", itemStatus: .unversioned, propsStatus: .none),
+        SvnStatusEntry(path: "project/assets/icon.png", itemStatus: .added, propsStatus: .none),
+    ]
+    let expanded = UnversionedDirectoryExpander.expand(statusEntries, workingCopyRoot: root)
+    #expect(expanded.count == 2)
+    #expect(expanded.filter { $0.itemStatus == .unversioned }.count == 1)
+    #expect(expanded.contains { $0.path == "project/assets/icon.png" && $0.itemStatus == .added })
+}
