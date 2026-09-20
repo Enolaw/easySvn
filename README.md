@@ -61,7 +61,40 @@ swift test
 集成测试会用 `svnadmin` 在临时目录创建本地 `file://` 仓库，不依赖网络。
 可通过环境变量 `EASYSVN_TEST_TMP` 指定测试临时目录。
 
-## 当前进度
+## 打包 .app（Release）
+
+本项目是 **Swift Package**，`swift build` 只会生成裸可执行文件，**不会**自动生成 `.app`。日常改代码请用上一节的 `swift run EasySvnApp` 或 Xcode ⌘R；需要可分发的应用包时再执行打包脚本。
+
+```bash
+export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
+
+# 可选版本号，默认 0.5.3
+./scripts/package.sh 0.5.3
+```
+
+脚本会依次执行 `swift test`、`swift build -c release`，并在 `dist/` 下产出：
+
+| 产物 | 说明 |
+|------|------|
+| `dist/easySvn.app` | 可直接双击或拖入「应用程序」 |
+| `dist/easySvn-<版本>-macos-<架构>.zip` | 压缩包 |
+| `dist/easySvn-<版本>-macos-<架构>.dmg` | 磁盘镜像 |
+
+Release 可执行文件位于 `.build/<架构>-apple-macosx/release/EasySvnApp`（例如 Apple 芯片为 `.build/arm64-apple-macosx/release/EasySvnApp`）。**只有** `scripts/package.sh` 会把它复制进 `dist/easySvn.app`。
+
+常见误区：
+
+- 只运行了 `swift build -c release`，却去打开旧的 `dist/easySvn.app` 或「应用程序」里早前安装的包——它们的修改时间不会变，因为并未重新打包。
+- `.build/` 目录下**没有** `.app`，只有 `EasySvnApp` 二进制；`.app` 只在 `dist/`（或你手动复制到的位置）。
+
+本地验证新包：
+
+```bash
+open dist/easySvn.app
+```
+
+安装说明与首次打开（右键「打开」等）见 [beta 安装说明](docs/beta安装说明.md)。
+
 
 - [x] M1：SVN 引擎层第一个闭环（进程执行器 + status/info XML 解析 + 基本命令）
 - [x] M1：引擎层补全（log/list 解析、diff/cat/export/delete/move/cleanup、认证注入、Keychain 凭据存储），29 项测试
@@ -72,7 +105,7 @@ swift test
 - [x] M3：冲突解决（冲突列表、三方合并、快捷 resolve、树冲突信息）
 - [x] M3：分支与合并（创建分支/标签、Switch、Merge 向导、mergeinfo）
 - [x] M3：仓库浏览器（懒加载目录树、远程 CRUD、文件预览/日志、从此处检出）
-- [x] M3：体验补全 + v0.5 beta（**v0.5.2** 已发布，见 [更新说明](docs/CHANGELOG.md)）
+- [x] M3：体验补全 + v0.5 beta（**v0.5.3** 已发布，见 [更新说明](docs/CHANGELOG.md)）
 - [ ] M4：Finder 集成（徽章 + 右键菜单，需 Xcode App target）
 
 ## 引擎层使用示例

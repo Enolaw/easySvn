@@ -9,6 +9,7 @@ struct StatusListView: View {
 
     @EnvironmentObject private var authStore: AuthSettingsStore
     @EnvironmentObject private var appSettings: AppSettingsStore
+    @EnvironmentObject private var store: WorkingCopyStore
     @StateObject private var viewModel = StatusViewModel()
     @State private var externalDiffError: String?
     @State private var fileWatcher = WorkingCopyFileWatcher()
@@ -18,6 +19,7 @@ struct StatusListView: View {
     @State private var diffPath: String?
     @State private var conflictPresentation: ConflictPresentation?
     @State private var expandedPaths: Set<String> = []
+    @State private var nestedRemovalCandidate: NestedWorkingCopy?
 
     private struct ConflictPresentation: Identifiable {
         let id = UUID()
@@ -44,6 +46,10 @@ struct StatusListView: View {
                         venvWarningBar
                         Divider()
                     }
+                    if !viewModel.nestedWorkingCopies.isEmpty {
+                        nestedWorkingCopyWarningBar
+                        Divider()
+                    }
                     listHeader
                     Divider()
                     listContent
@@ -66,6 +72,34 @@ struct StatusListView: View {
         }
         .onChange(of: authStore.autoRefreshEnabled) { _ in
             startFileWatcherIfNeeded()
+        }
+        .alert(
+            "移除此嵌套 .svn？",
+            isPresented: Binding(
+                get: { nestedRemovalCandidate != nil },
+                set: { if !$0 { nestedRemovalCandidate = nil } }
+            ),
+            presenting: nestedRemovalCandidate
+        ) { nested in
+            Button("删除 .svn", role: .destructive) {
+                Task {
+                    await viewModel.removeNestedWorkingCopyMetadata(
+                        nested: nested,
+                        in: workingCopy
+                    )
+                }
+            }
+            Button("取消", role: .cancel) {}
+        } message: { nested in
+            Text(
+                """
+                通常是因为复制文件夹时把 .svn 一并复制进来了。
+
+                删除「\(nested.relativePath)」内的 .svn 后，该目录会对此工作副本显示为未版本控制文件，而不会自动关联到当前仓库。
+
+                若这些文件属于其他 SVN 路径（如卡面业务），请优先使用「添加为工作副本」单独管理，而不是删除 .svn。
+                """
+            )
         }
         .sheet(isPresented: $showCommitSheet) {
             CommitSheet(
@@ -229,6 +263,39 @@ struct StatusListView: View {
             }
             .disabled(viewModel.isLoading)
             Spacer()
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
+        .background(Color.orange.opacity(0.1))
+    }
+
+    // MARK: - 嵌套工作副本提示
+
+    private var nestedWorkingCopyWarningBar: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 10) {
+                Image(systemName: "square.stack.3d.up.fill")
+                    .foregroundStyle(.orange)
+                Text("检测到嵌套工作副本（常见于复制文件夹时带入了 .svn）。外层无法准确显示其内部状态。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Spacer()
+            }
+            ForEach(viewModel.nestedWorkingCopies) { nested in
+                HStack(spacing: 12) {
+                    Text(nested.relativePath)
+                        .font(.caption.monospaced())
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    Spacer()
+                    Button("添加为工作副本") {
+                        store.add(directoryURL: nested.directoryURL(in: workingCopy.directoryURL))
+                    }
+                    Button("删除 .svn", role: .destructive) {
+                        nestedRemovalCandidate = nested
+                    }
+                }
+            }
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 8)

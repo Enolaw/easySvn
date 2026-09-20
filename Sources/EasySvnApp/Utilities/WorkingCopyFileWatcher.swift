@@ -80,7 +80,8 @@ final class WorkingCopyFileWatcher: @unchecked Sendable {
             if path == root {
                 result.append(".")
             } else if path.hasPrefix(prefix) {
-                result.append(String(path.dropFirst(prefix.count)))
+                let relative = String(path.dropFirst(prefix.count))
+                result.append(WorkingCopyRelativePath.normalize(relative))
             }
         }
         return Array(Set(result))

@@ -77,6 +77,8 @@ final class StatusViewModel: ObservableObject {
     }
     /// 最近提交日志（供提交面板快速复用）。
     @Published private(set) var recentCommitMessages: [String]
+    /// 外层工作副本内嵌套的独立 SVN 工作副本。
+    @Published private(set) var nestedWorkingCopies: [NestedWorkingCopy] = []
 
     private weak var authStore: AuthSettingsStore?
     private weak var appSettings: AppSettingsStore?
@@ -185,6 +187,32 @@ final class StatusViewModel: ObservableObject {
         IgnorePathHelper.massAddedVenvRoots(
             in: entries.map { (path: $0.path, status: $0.itemStatus.rawValue) }
         )
+    }
+
+    /// 删除嵌套目录内的 `.svn`，使其对外层工作副本显示为普通未版本控制文件。
+    func removeNestedWorkingCopyMetadata(
+        nested: NestedWorkingCopy,
+        in workingCopy: WorkingCopy
+    ) async {
+        isLoading = true
+        loadingMessage = "正在移除外层嵌套 .svn…"
+        operationMessage = nil
+        defer {
+            isLoading = false
+            loadingMessage = nil
+        }
+
+        let directoryURL = nested.directoryURL(in: workingCopy.directoryURL)
+        do {
+            try NestedWorkingCopyDetector.removeMetadata(at: directoryURL)
+            await refresh(workingCopy: workingCopy, preserveSelection: true)
+            operationMessage = """
+            已移除外层嵌套 .svn：\(nested.relativePath)
+            该目录下的文件现对此工作副本显示为未版本控制。若这些文件应受另一仓库管理，请改用「添加为工作副本」单独打开。
+            """
+        } catch {
+            operationError = error.localizedDescription
+        }
     }
 
     // MARK: - 勾选（文件夹联动子项）
@@ -369,8 +397,18 @@ final class StatusViewModel: ObservableObject {
                 )
                 try Task.checkCancellation()
                 guard isActiveSession(session) else { return }
-                mergeIncrementalStatus(updated, focusPaths: focusPaths, workingCopyRoot: workingCopy.directoryURL)
-                return
+                if updated.isEmpty {
+                    // 指定路径未返回状态时改用全量扫描，避免误删条目后又被 Expander 补回为未版本控制。
+                } else {
+                    try await mergeIncrementalStatus(
+                        updated,
+                        focusPaths: focusPaths,
+                        workingCopyRoot: workingCopy.directoryURL,
+                        client: client,
+                        includeIgnored: includeIgnored
+                    )
+                    return
+                }
             }
 
             let info = try await client.info(at: workingCopy.directoryURL)
@@ -384,7 +422,12 @@ final class StatusViewModel: ObservableObject {
             )
             try Task.checkCancellation()
             guard isActiveSession(session) else { return }
-            applyLoadedEntries(loadedEntries, workingCopyRoot: workingCopy.directoryURL)
+            try await applyLoadedEntries(
+                loadedEntries,
+                workingCopyRoot: workingCopy.directoryURL,
+                client: client,
+                includeIgnored: includeIgnored
+            )
             if !preserveSelection {
                 selectedPaths = Set(committableEntries.map(\.path))
             } else {
@@ -402,6 +445,7 @@ final class StatusViewModel: ObservableObject {
             }
             info = nil
             entries = []
+            nestedWorkingCopies = []
             statusTree = []
             subtreeSelectableCache = [:]
             selectionSummary = SelectionActionSummary()
@@ -620,7 +664,6 @@ final class StatusViewModel: ObservableObject {
         await perform(
             workingCopy: workingCopy,
             loadingMessage: "正在加入版本控制…",
-            changedPaths: allowed,
             preserveSelection: true
         ) { client in
             try await client.add(
@@ -703,11 +746,27 @@ final class StatusViewModel: ObservableObject {
             return PreparedAddPaths(allowed: nil, skippedNote: nil)
         }
 
+        let nestedRoots = nestedWorkingCopyRootPaths
+        let nestedBlocked = unversionedInput.filter {
+            NestedWorkingCopyDetector.isInsideNestedWorkingCopy($0, roots: nestedRoots)
+        }
+        let addableInput = unversionedInput.filter {
+            !NestedWorkingCopyDetector.isInsideNestedWorkingCopy($0, roots: nestedRoots)
+        }
+
+        var notes: [String] = []
+        if !nestedBlocked.isEmpty {
+            notes.append(formatNestedWorkingCopyBlockedSummary(paths: nestedBlocked))
+        }
+        guard !addableInput.isEmpty else {
+            operationError = "所选路径位于嵌套工作副本内，请单独添加该工作副本后再操作"
+            return PreparedAddPaths(allowed: nil, skippedNote: notes.joined(separator: "\n\n"))
+        }
+
         let evaluation = UnversionedAddPolicy.evaluate(
-            paths: unversionedInput,
+            paths: addableInput,
             workingCopyRoot: workingCopy.directoryURL
         )
-        var notes: [String] = []
         if !evaluation.redirected.isEmpty {
             notes.append(UnversionedAddPolicy.formatRedirectedSummary(redirected: evaluation.redirected))
         }
@@ -790,6 +849,8 @@ final class StatusViewModel: ObservableObject {
         preserveSelection: Bool = false,
         _ operation: @escaping (SvnClient) async throws -> String
     ) async -> Bool {
+        refreshTask?.cancel()
+        refreshSession = UUID()
         isLoading = true
         self.loadingMessage = loadingMessage
         operationMessage = nil
@@ -832,7 +893,7 @@ final class StatusViewModel: ObservableObject {
     }
 
     private func pauseWatcherBriefly() {
-        watcherPausedUntil = Date().addingTimeInterval(2)
+        watcherPausedUntil = Date().addingTimeInterval(4)
     }
 
     private func makeClient(for workingCopy: WorkingCopy) throws -> SvnClient {
@@ -873,23 +934,73 @@ final class StatusViewModel: ObservableObject {
         return true
     }
 
-    private func applyLoadedEntries(_ loadedEntries: [SvnStatusEntry], workingCopyRoot: URL) {
-        entries = UnversionedDirectoryExpander.expand(loadedEntries, workingCopyRoot: workingCopyRoot)
+    private func applyLoadedEntries(
+        _ loadedEntries: [SvnStatusEntry],
+        workingCopyRoot: URL,
+        client: SvnClient,
+        includeIgnored: Bool
+    ) async throws {
+        refreshNestedWorkingCopies(in: workingCopyRoot)
+        entries = try await expandEntries(
+            loadedEntries,
+            workingCopyRoot: workingCopyRoot,
+            client: client,
+            includeIgnored: includeIgnored
+        )
         rebuildDisplayState()
     }
 
     private func mergeIncrementalStatus(
         _ updated: [SvnStatusEntry],
         focusPaths: [String],
-        workingCopyRoot: URL
-    ) {
+        workingCopyRoot: URL,
+        client: SvnClient,
+        includeIgnored: Bool
+    ) async throws {
         let normalizedUpdated = updated.map { $0.withNormalizedPath() }
+        guard !normalizedUpdated.isEmpty else { return }
+
+        refreshNestedWorkingCopies(in: workingCopyRoot)
+
         var affected = Set(focusPaths.map { WorkingCopyRelativePath.normalize($0) })
         affected.formUnion(normalizedUpdated.map(\.path))
+        for path in focusPaths.map({ WorkingCopyRelativePath.normalize($0) }) {
+            affected.formUnion(ancestorPaths(of: path))
+        }
         entries.removeAll { affected.contains(WorkingCopyRelativePath.normalize($0.path)) }
         entries.append(contentsOf: normalizedUpdated)
-        entries = UnversionedDirectoryExpander.expand(entries, workingCopyRoot: workingCopyRoot)
+        entries = try await expandEntries(
+            entries,
+            workingCopyRoot: workingCopyRoot,
+            client: client,
+            includeIgnored: includeIgnored
+        )
         rebuildDisplayState()
+    }
+
+    private func refreshNestedWorkingCopies(in workingCopyRoot: URL) {
+        nestedWorkingCopies = NestedWorkingCopyDetector.detect(in: workingCopyRoot)
+    }
+
+    private var nestedWorkingCopyRootPaths: Set<String> {
+        Set(nestedWorkingCopies.map(\.relativePath))
+    }
+
+    private func expandEntries(
+        _ entries: [SvnStatusEntry],
+        workingCopyRoot: URL,
+        client: SvnClient,
+        includeIgnored: Bool
+    ) async throws -> [SvnStatusEntry] {
+        let nestedRoots = nestedWorkingCopyRootPaths
+        let expanded = try await UnversionedDirectoryExpander.expand(
+            entries,
+            workingCopyRoot: workingCopyRoot,
+            client: client,
+            includeIgnored: includeIgnored,
+            nestedWorkingCopyRoots: nestedRoots
+        )
+        return NestedWorkingCopyDetector.filterEntries(expanded, path: \.path, nestedRoots: nestedRoots)
     }
 
     private func rememberCommitMessage(_ message: String) {
@@ -897,6 +1008,18 @@ final class StatusViewModel: ObservableObject {
         messages.insert(message, at: 0)
         recentCommitMessages = Array(messages.prefix(Self.maxRecentMessages))
         AppUserDefaults.shared.set(recentCommitMessages, forKey: Self.recentMessagesKey)
+    }
+
+    private func formatNestedWorkingCopyBlockedSummary(paths: [String]) -> String {
+        var lines = ["\(paths.count) 项位于嵌套工作副本内，已跳过："]
+        for path in paths.prefix(3) {
+            lines.append("• \(path)")
+        }
+        if paths.count > 3 {
+            lines.append("… 另有 \(paths.count - 3) 项")
+        }
+        lines.append("请在左侧单独添加对应嵌套工作副本后再操作。")
+        return lines.joined(separator: "\n")
     }
 
     // MARK: - 错误文案

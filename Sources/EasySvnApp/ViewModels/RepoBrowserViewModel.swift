@@ -242,11 +242,17 @@ final class RepoBrowserViewModel: ObservableObject {
         }
     }
 
-    func exportSelected(to destination: URL, workingCopy: WorkingCopy) async -> Bool {
-        guard let url = selectedURL, !selectedIsDirectory else { return false }
+    func exportSelected(url: String, to destination: URL, workingCopy: WorkingCopy) async -> Bool {
+        let accessed = destination.startAccessingSecurityScopedResource()
+        defer {
+            if accessed {
+                destination.stopAccessingSecurityScopedResource()
+            }
+        }
         return await perform(workingCopy: workingCopy) { client in
-            try await client.export(url, to: destination, revision: self.revisionArgument)
-            return "已导出到 \(destination.path)"
+            let data = try await client.cat(url, revision: self.revisionArgument)
+            try Self.writeExportedFile(data, to: destination)
+            return "已导出到 \(destination.path(percentEncoded: false))"
         }
     }
 
@@ -316,6 +322,14 @@ final class RepoBrowserViewModel: ObservableObject {
         if let parentParent = RepositoryURLHelper.parentURL(of: parent) {
             await loadTreeChildren(parentURL: parentParent)
         }
+    }
+
+    private static func writeExportedFile(_ data: Data, to destination: URL) throws {
+        let dest = destination.standardizedFileURL
+        if FileManager.default.fileExists(atPath: dest.path) {
+            try FileManager.default.removeItem(at: dest)
+        }
+        try data.write(to: dest, options: .atomic)
     }
 
     private func findNode(url: String) -> RepoTreeNode? {

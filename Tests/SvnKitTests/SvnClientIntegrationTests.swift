@@ -332,6 +332,11 @@ struct SvnClientIntegrationTests {
         #expect(FileManager.default.fileExists(atPath: exportDir.appendingPathComponent("new-name.txt").path))
         #expect(!FileManager.default.fileExists(atPath: exportDir.appendingPathComponent(".svn").path))
         #expect(!FileManager.default.fileExists(atPath: exportDir.appendingPathComponent("del.txt").path))
+
+        let fileDest = repo.root.appendingPathComponent("exported-file.txt")
+        try "placeholder".write(to: fileDest, atomically: true, encoding: .utf8)
+        try await client.export(repo.repositoryURL + "/new-name.txt", to: fileDest)
+        #expect(try String(contentsOf: fileDest, encoding: .utf8).contains("y"))
     }
 
     @Test("目录 svn:ignore 变更显示为属性已修改且可提交")

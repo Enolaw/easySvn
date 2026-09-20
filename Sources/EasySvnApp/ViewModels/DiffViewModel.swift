@@ -46,6 +46,22 @@ final class DiffViewModel: ObservableObject {
     @Published private(set) var errorMessage: String?
     @Published private(set) var isEmpty = false
 
+    var addedLineCount: Int {
+        sideBySideRows.reduce(0) { $0 + ($1.rightHighlight == .addition ? 1 : 0) }
+    }
+
+    var deletedLineCount: Int {
+        sideBySideRows.reduce(0) { $0 + ($1.leftHighlight == .deletion ? 1 : 0) }
+    }
+
+    var changeBlockIDs: [Int] {
+        SideBySideDiffBuilder.changeBlockIDs(in: sideBySideRows)
+    }
+
+    var unifiedChangeBlockIDs: [Int] {
+        UnifiedDiffParser.changeBlockIDs(in: lines)
+    }
+
     private weak var authStore: AuthSettingsStore?
 
     var filePath: String {
@@ -155,23 +171,63 @@ final class DiffViewModel: ObservableObject {
             return
         }
 
-        if Self.isBinaryDiffMessage(trimmed) {
+        if !Self.isBinaryDiffMessage(trimmed) {
+            lines = UnifiedDiffParser.parse(text)
+        } else {
+            lines = []
+        }
+
+        if await loadSideBySideFromFilePair(kind: kind, workingCopy: workingCopy, client: client) {
+            isEmpty = false
+            return
+        }
+
+        if lines.isEmpty {
+            isEmpty = true
+            sideBySideRows = []
+            return
+        }
+
+        applyParsedDiffLines()
+    }
+
+    /// 用 BASE / 工作副本（或两个版本）的真实内容做并排对比，避免统一 diff 粘行导致左右看起来一样。
+    @discardableResult
+    private func loadSideBySideFromFilePair(
+        kind: ExternalDiffKind,
+        workingCopy: WorkingCopy,
+        client: SvnClient
+    ) async -> Bool {
+        do {
             let pair = try await DiffAssetLoader.loadDataPair(
                 kind: kind,
                 workingCopy: workingCopy,
                 client: client
             )
+            let leftText = DiffLineSplitter.decode(pair.left)
+            let rightText = DiffLineSplitter.decode(pair.right)
+            guard !leftText.isEmpty || !rightText.isEmpty else { return false }
+            let rows = SideBySideDiffBuilder.buildFromFullText(left: leftText, right: rightText)
+            guard Self.hasHighlightedChanges(rows) else { return false }
             leftLabel = pair.leftLabel
             rightLabel = pair.rightLabel
-            let leftText = String(data: pair.left, encoding: .utf8) ?? ""
-            let rightText = String(data: pair.right, encoding: .utf8) ?? ""
-            sideBySideRows = SideBySideDiffBuilder.buildFromFullText(left: leftText, right: rightText)
-            lines = []
-            isEmpty = sideBySideRows.isEmpty
-            return
+            sideBySideRows = rows
+            return true
+        } catch {
+            return false
         }
+    }
 
-        applyDiffText(text)
+    private func applyParsedDiffLines() {
+        sideBySideRows = SideBySideDiffBuilder.build(from: lines)
+        isEmpty = sideBySideRows.filter {
+            $0.leftHighlight != .empty || $0.rightHighlight != .empty
+                || $0.leftText != nil || $0.rightText != nil
+        }.isEmpty
+    }
+
+    private static func hasHighlightedChanges(_ rows: [SideBySideRow]) -> Bool {
+        rows.contains { $0.leftHighlight == .deletion || $0.rightHighlight == .addition }
     }
 
     private func applyTextLabels(for kind: ExternalDiffKind) {
@@ -191,15 +247,6 @@ final class DiffViewModel: ObservableObject {
                 hasContent: true
             )
         }
-    }
-
-    private func applyDiffText(_ text: String) {
-        lines = UnifiedDiffParser.parse(text)
-        sideBySideRows = SideBySideDiffBuilder.build(from: lines)
-        isEmpty = sideBySideRows.filter {
-            $0.leftHighlight != .empty || $0.rightHighlight != .empty
-                || $0.leftText != nil || $0.rightText != nil
-        }.isEmpty
     }
 
     private static func isBinaryDiffMessage(_ text: String) -> Bool {

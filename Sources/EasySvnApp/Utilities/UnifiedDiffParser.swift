@@ -21,8 +21,7 @@ enum UnifiedDiffParser {
 
     static func parse(_ text: String) -> [DiffLine] {
         var lines: [DiffLine] = []
-        for (index, raw) in text.split(separator: "\n", omittingEmptySubsequences: false).enumerated() {
-            let line = String(raw)
+        for (index, line) in DiffLineSplitter.split(text).enumerated() {
             let kind: DiffLineKind
             if line.hasPrefix("+++") || line.hasPrefix("---") || line.hasPrefix("Index:")
                 || line.hasPrefix("===") || line.hasPrefix("Property") {
@@ -41,5 +40,23 @@ enum UnifiedDiffParser {
             lines.append(DiffLine(id: index, kind: kind, text: line))
         }
         return lines
+    }
+
+    /// 连续增删行组成一个变更块，返回每块首行 id。
+    static func changeBlockIDs(in lines: [DiffLine]) -> [Int] {
+        var ids: [Int] = []
+        var inBlock = false
+        for line in lines {
+            switch line.kind {
+            case .addition, .deletion:
+                if !inBlock {
+                    ids.append(line.id)
+                    inBlock = true
+                }
+            case .header, .hunk, .context:
+                inBlock = false
+            }
+        }
+        return ids
     }
 }

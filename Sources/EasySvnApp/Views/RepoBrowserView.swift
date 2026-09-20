@@ -402,11 +402,19 @@ struct RepoBrowserView: View {
 
     private func exportFile(_ url: String) {
         let panel = NSSavePanel()
+        panel.canCreateDirectories = true
         panel.nameFieldStringValue = RepositoryURLHelper.lastComponent(of: url)
         panel.prompt = "导出"
         guard panel.runModal() == .OK, let dest = panel.url else { return }
         Task {
-            _ = await viewModel.exportSelected(to: dest, workingCopy: workingCopy)
+            let succeeded = await viewModel.exportSelected(
+                url: url,
+                to: dest,
+                workingCopy: workingCopy
+            )
+            if succeeded {
+                NSWorkspace.shared.activateFileViewerSelecting([dest])
+            }
         }
     }
 }

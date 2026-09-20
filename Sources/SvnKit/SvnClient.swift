@@ -449,9 +449,14 @@ public struct SvnClient: Sendable {
         return MergeinfoParser.parseRevisions(result.stdoutText)
     }
 
-    /// 导出干净副本（不含 .svn）。
+    /// 导出干净副本（不含 .svn）。目标已存在时覆盖。
     public func export(_ target: String, to destination: URL, revision: String? = nil) async throws {
-        var args = ["export", target, destination.path]
+        var args = [
+            "export",
+            "--force",
+            Self.escapingPegRevision(target),
+            destination.path(percentEncoded: false)
+        ]
         if let revision {
             args += ["--revision", revision]
         }
